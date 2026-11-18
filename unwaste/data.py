@@ -100,8 +100,8 @@ def make_synthetic(cfg: Config, n_days: int = 90) -> pd.DataFrame:
             lam_base = 0.9 * store_eff[s] * prod_eff[p]
             for di, d in enumerate(dates):
                 disc = 1.0 if rng.random() > 0.12 else rng.choice([0.85, 0.9])
-                hol = int(d.dayofweek >= 5)
-                lam = lam_base * dow[d.dayofweek] * (1 + 1.8 * (1 - disc))
+                hol = int(d.day_of_week >= 5)
+                lam = lam_base * dow[d.day_of_week] * (1 + 1.8 * (1 - disc))
                 hourly_lam = lam * hour_profile * 10
                 demand = rng.poisson(hourly_lam)
                 stock = rng.poisson(max(lam * 10 * rng.uniform(0.7, 1.6), 1))

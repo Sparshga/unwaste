@@ -52,7 +52,7 @@ def _build_rows(Y, exo, dates, origins, H, series_codes):
         for h in range(1, H + 1):
             t = o + h
             tt = min(t, T - 1)                      # beyond the data: reuse last known exo
-            dow = (dates[o].dayofweek + h) % 7
+            dow = (dates[o].day_of_week + h) % 7
             same_dow = [Y[:, t - 7 * k] for k in (1, 2, 3, 4) if 0 <= t - 7 * k <= o]
             blk = {**base, "h": np.full(S, h), "dow": np.full(S, dow),
                    "same_dow": np.mean(same_dow, axis=0) if same_dow else base["m7"],

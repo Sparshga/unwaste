@@ -37,7 +37,7 @@ def _hourly_frame(panel: Panel, cfg: Config) -> pd.DataFrame:
         "sales": panel.hourly_sales[rows, hr],
         "oos": panel.hourly_oos[rows, hr],
         "series_id": d["series_id"].to_numpy()[rows],
-        "dow": pd.DatetimeIndex(d["dt"]).dayofweek.to_numpy()[rows],
+        "dow": pd.DatetimeIndex(d["dt"]).day_of_week.to_numpy()[rows],
     })
     for c in ["discount", "holiday", "activity", "rain", "temp"]:
         f[c] = d[c].to_numpy()[rows]

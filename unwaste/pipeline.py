@@ -80,6 +80,8 @@ def run(cfg: Config, sweep: bool = False) -> dict:
     headline = {
         "waste_reduction_pct": round(100 * (b["waste_units"] - u["waste_units"]) / max(b["waste_units"], 1), 1),
         "net_margin_gain_rs": u["net_margin_rs"] - b["net_margin_rs"],
+        "net_after_lost_gain_rs": u["net_after_lost_sales_rs"] - b["net_after_lost_sales_rs"],
+        "lost_units_avoided": b["lost_units"] - u["lost_units"],
         "service_change_pts": round(u["service_level_pct"] - b["service_level_pct"], 2),
     }
     t0 = F_cor["train_end"] + 1
@@ -107,7 +109,8 @@ def run(cfg: Config, sweep: bool = False) -> dict:
     print(f"[run] wrote {out}/scoreboard.json, actions.json, demand_truth.json "
           f"in {time.time() - t_start:.0f}s")
     print(f"[headline] waste down {headline['waste_reduction_pct']:.1f}% vs baseline, "
-          f"net margin {headline['net_margin_gain_rs']:+,} ₹, service {headline['service_change_pts']:+.2f} pts")
+          f"net margin {headline['net_margin_gain_rs']:+,} ₹ "
+          f"({headline['net_after_lost_gain_rs']:+,} ₹ after lost-sale cost), service {headline['service_change_pts']:+.2f} pts")
     return scoreboard
 
 

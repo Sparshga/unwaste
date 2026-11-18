@@ -59,6 +59,9 @@ class Ledger:
     false_move_units: float = 0.0
     breaches: int = 0
     ending_stock_value: float = 0.0
+    lost_units: float = 0.0
+    lost_value: float = 0.0          # lost units x price
+    penalty_frac: float = 0.5
     actions: list = field(default_factory=list)
 
     def summary(self) -> dict:
@@ -69,6 +72,8 @@ class Ledger:
             "waste_pct_of_received": round(100 * self.waste / max(self.received, 1), 2),
             "service_level_pct": round(100 * self.served / max(self.demand, 1), 2),
             "net_margin_rs": round(net),
+            "lost_units": round(self.lost_units),
+            "net_after_lost_sales_rs": round(net - self.penalty_frac * self.lost_value),
             "revenue_rs": round(self.revenue),
             "purchase_rs": round(self.purchase),
             "transfer_units": int(self.transfer_units),
@@ -97,7 +102,7 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
     for s, p in enumerate(meta["product_id"].to_numpy()):
         by_product[p].append(s)
 
-    led = Ledger()
+    led = Ledger(penalty_frac=cfg.lost_sale_penalty_frac)
     stock: list[list[Batch]] = [[] for _ in range(nS)]
     markdown_until = np.full(nS, -1)
     open_moves = []                                     # (sender, until_day, units)
@@ -137,6 +142,8 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
             led.served += min(sold, base_want)
             led.revenue += sold * price[s] * (1 - md)
             lost_today[s] = max(0, base_want - sold)
+            led.lost_units += lost_today[s]
+            led.lost_value += lost_today[s] * price[s]
             # expire anything at its sell-by line tonight
             keep = []
             for b in stock[s]:

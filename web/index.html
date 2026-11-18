@@ -201,15 +201,15 @@ async function load(name) {
   $('kpis').innerHTML = `
     <div class="card"><div class="kpi ${hl.waste_reduction_pct >= 0 ? 'good' : 'bad'}">${hl.waste_reduction_pct >= 0 ? '−' : '+'}${Math.abs(hl.waste_reduction_pct)}%</div><div class="lbl">units wasted vs baseline (${fmt(b.waste_units)} → ${fmt(u.waste_units)})</div></div>
     <div class="card"><div class="kpi ${hl.service_change_pts >= 0 ? 'good' : 'bad'}">${hl.service_change_pts >= 0 ? '+' : ''}${hl.service_change_pts} pts</div><div class="lbl">service level (${b.service_level_pct}% → ${u.service_level_pct}%)</div></div>
-    <div class="card"><div class="kpi ${hl.net_margin_gain_rs >= 0 ? 'good' : 'bad'}">${hl.net_margin_gain_rs >= 0 ? '+' : ''}${rs(hl.net_margin_gain_rs)}</div><div class="lbl">net margin over ${score.replay_window[0]} → ${score.replay_window[1]}</div></div>
+    <div class="card"><div class="kpi ${hl.net_after_lost_gain_rs >= 0 ? 'good' : 'bad'}">${hl.net_after_lost_gain_rs >= 0 ? '+' : ''}${rs(hl.net_after_lost_gain_rs)}</div><div class="lbl">net margin after lost-sale cost (${fmt(hl.lost_units_avoided)} fewer lost sales) · before it: ${hl.net_margin_gain_rs >= 0 ? '+' : ''}${rs(hl.net_margin_gain_rs)}</div></div>
     <div class="card"><div class="kpi">${u.shelf_life_breaches}</div><div class="lbl">shelf-life breaches (guardrail)</div></div>`;
   const keys = ['baseline', 'forecast_raw', 'forecast_corrected', 'unwaste'];
   const cols = [['waste_units', 'Units wasted', fmt], ['waste_pct_of_received', 'Waste %', v => v + '%'], ['service_level_pct', 'Service level', v => v + '%'],
-    ['net_margin_rs', 'Net margin', rs], ['transfer_units', 'Units transferred', fmt], ['early_markdowns', 'Early markdowns', fmt],
+    ['net_margin_rs', 'Net margin', rs], ['lost_units', 'Lost sales (units)', fmt], ['net_after_lost_sales_rs', 'Net after lost-sale cost', rs], ['transfer_units', 'Units transferred', fmt], ['early_markdowns', 'Early markdowns', fmt],
     ['false_move_units', 'False moves', fmt], ['shelf_life_breaches', 'Breaches', fmt]];
   $('table').innerHTML = `<table><tr><th>Policy</th>${cols.map(c => `<th>${c[1]}</th>`).join('')}</tr>${keys.map(k =>
     `<tr class="${k === 'unwaste' ? 'win' : ''}"><td>${P[k].label}</td>${cols.map(c => `<td>${c[2](P[k][c[0]])}</td>`).join('')}</tr>`).join('')}</table>`;
-  $('scorenote').textContent = `Train ${score.train_window[0]} → ${score.train_window[1]}, replay ${score.replay_window[0]} → ${score.replay_window[1]} (time split). Every policy faces identical demand. Net margin = sales + salvage − purchases − transfer costs + stock left at cost. Prices, shelf lives and costs are stated assumptions (see config).`;
+  $('scorenote').textContent = `Train ${score.train_window[0]} → ${score.train_window[1]}, replay ${score.replay_window[0]} → ${score.replay_window[1]} (time split). Every policy faces identical demand. Net margin = sales + salvage − purchases − transfer costs + stock left at cost. Lost-sale cost = 50% of price per unit of unmet demand (customer goodwill), the same assumption the ordering rule uses. Prices, shelf lives and costs are stated assumptions (see config).`;
   $('chart').innerHTML = `<div class="row"><div style="flex:1;min-width:280px"><b>Waste % of received</b>${svgBars(keys.map(k => P[k].waste_pct_of_received), ['Baseline', 'Raw fcst', '+Correction', 'Unwaste'], {fmt: v => v + '%', colors: ['#9AA3B5', '#9AA3B5', '#9AA3B5', '#2B59F3']})}</div>
     <div style="flex:1;min-width:280px"><b>Service level %</b>${svgBars(keys.map(k => P[k].service_level_pct), ['Baseline', 'Raw fcst', '+Correction', 'Unwaste'], {fmt: v => v + '%', colors: ['#9AA3B5', '#9AA3B5', '#9AA3B5', '#2B59F3']})}</div></div>`;
   if (score.sweep && score.sweep.length) {
