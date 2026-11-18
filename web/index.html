@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unwaste · Manager screen</title>
+<!--
+  Step 9 · The screen. It only READS the JSON files the nightly job writes (web/data/*.json),
+  so what you see is exactly what the pipeline produced. No numbers are typed in here.
+  Owner: Aniz.
+-->
+<style>
+  :root{ --blue:#2B59F3; --lime:#D7F65A; --ink:#14171F; --bg:#F6F7FB; --card:#FFFFFF; --muted:#5B6270; --line:#E1E5EE; --red:#D64545; }
+  *{ box-sizing:border-box }
+  body{ margin:0; font-family:Inter, system-ui, -apple-system, Segoe UI, Arial, sans-serif; background:var(--bg); color:var(--ink); }
+  header{ background:var(--ink); color:#fff; padding:16px 28px; display:flex; align-items:center; gap:18px; flex-wrap:wrap }
+  header h1{ margin:0; font-size:22px; letter-spacing:-.3px }
+  .sticker{ background:var(--lime); color:var(--ink); padding:2px 10px; font-weight:700; border-radius:4px }
+  .badge{ font-size:12px; padding:3px 8px; border-radius:20px; border:1px solid #ffffff55; color:#dfe5f5 }
+  .badge.warn{ background:#D64545; border-color:#D64545; color:#fff }
+  nav{ display:flex; gap:4px; padding:0 28px; background:#fff; border-bottom:1px solid var(--line) }
+  nav button{ border:0; background:none; padding:14px 16px; font:inherit; font-weight:600; color:var(--muted); cursor:pointer; border-bottom:3px solid transparent }
+  nav button.on{ color:var(--ink); border-bottom-color:var(--blue) }
+  main{ padding:24px 28px; max-width:1280px; margin:0 auto }
+  .row{ display:flex; gap:16px; flex-wrap:wrap }
+  .card{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 20px; flex:1; min-width:220px }
+  .kpi{ font-size:34px; font-weight:800; letter-spacing:-.5px }
+  .kpi.good{ color:#1C7C3A } .kpi.bad{ color:var(--red) }
+  .lbl{ color:var(--muted); font-size:13px; margin-top:4px }
+  table{ width:100%; border-collapse:collapse; background:#fff; border-radius:10px; overflow:hidden; border:1px solid var(--line); font-size:14px }
+  th,td{ padding:10px 12px; border-bottom:1px solid var(--line); text-align:right }
+  th:first-child,td:first-child{ text-align:left }
+  th{ background:var(--ink); color:#fff; font-weight:600 }
+  tr.win td{ background:#F3FBD4; font-weight:600 }
+  h2{ font-size:18px; margin:26px 0 10px }
+  .muted{ color:var(--muted); font-size:13px }
+  .controls{ display:flex; gap:12px; align-items:center; margin-bottom:14px; flex-wrap:wrap }
+  select{ font:inherit; padding:6px 10px; border-radius:6px; border:1px solid var(--line); background:#fff }
+  .act{ display:grid; grid-template-columns: 1.3fr 1fr 1.4fr .8fr; gap:12px; align-items:center; background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:10px; cursor:pointer }
+  .act:hover{ border-color:var(--blue) }
+  .act.sel{ outline:2px solid var(--blue) }
+  .pill{ display:inline-block; padding:4px 10px; border-radius:20px; font-weight:700; font-size:13px }
+  .pill.transfer{ background:var(--lime) } .pill.markdown{ background:#FFE3B3 } .pill.hold{ background:#E9EDF8 }
+  .bar{ height:8px; background:#E4E9F7; border-radius:4px; overflow:hidden; margin-top:6px }
+  .bar > i{ display:block; height:100%; background:var(--blue) }
+  .money{ font-weight:800; text-align:right }
+  .detail{ background:#fff; border:1px solid var(--line); border-radius:10px; padding:16px 18px; position:sticky; top:12px }
+  .grid2{ display:grid; grid-template-columns: 1.5fr 1fr; gap:18px; align-items:start }
+  @media (max-width:900px){ .grid2{ grid-template-columns:1fr } .act{ grid-template-columns:1fr 1fr } }
+  .hide{ display:none }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="sticker">Unwaste</span> &nbsp;Batch expiry risk · manager screen</h1>
+  <span class="badge" id="src">loading…</span>
+  <span class="badge" id="eng"></span>
+  <span class="badge" id="win"></span>
+</header>
+<nav>
+  <button data-tab="actions" class="on">Store actions</button>
+  <button data-tab="score">Replay scoreboard</button>
+  <button data-tab="truth">Demand-truth test</button>
+</nav>
+<main>
+  <!-- ======================= ACTIONS ======================= -->
+  <section id="tab-actions">
+    <div class="controls">
+      <label>Night <select id="night"></select></label>
+      <label>Store <select id="store"><option value="">All stores</option></select></label>
+      <span class="muted" id="count"></span>
+    </div>
+    <div class="grid2">
+      <div id="list"></div>
+      <div class="detail" id="detail"><p class="muted">Click a batch to see its Monte Carlo risk.</p></div>
+    </div>
+  </section>
+
+  <!-- ======================= SCOREBOARD ======================= -->
+  <section id="tab-score" class="hide">
+    <div class="row" id="kpis"></div>
+    <h2>Same demand, four policies</h2>
+    <div id="table"></div>
+    <p class="muted" id="scorenote"></p>
+    <h2>Waste and service by policy</h2>
+    <div class="card" id="chart"></div>
+    <div id="sweepwrap"></div>
+  </section>
+
+  <!-- ======================= DEMAND TRUTH ======================= -->
+  <section id="tab-truth" class="hide">
+    <div class="row" id="tkpis"></div>
+    <h2>Hidden demand: truth vs our estimate</h2>
+    <div class="card" id="tchart"></div>
+    <h2>One real stockout day: sales seen vs demand recovered</h2>
+    <div class="card" id="dchart"></div>
+  </section>
+</main>
+
+<script>
+const fmt = n => n.toLocaleString('en-IN');
+const rs = n => (n < 0 ? '−₹' : '₹') + fmt(Math.abs(Math.round(n)));
+const $ = id => document.getElementById(id);
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  ['actions','score','truth'].forEach(t => $('tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
+});
+
+function svgBars(values, labels, opts = {}) {
+  const W = opts.w || 640, H = opts.h || 220, pad = 36, n = values.length;
+  const max = Math.max(...values, 1e-9) * 1.15, bw = (W - pad * 2) / n * 0.6;
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img">`;
+  values.forEach((v, i) => {
+    const x = pad + (i + 0.5) * (W - pad * 2) / n - bw / 2, h = (H - 60) * v / max, y = H - 34 - h;
+    const fill = (opts.colors && opts.colors[i]) || '#2B59F3';
+    s += `<rect x="${x}" y="${y}" width="${bw}" height="${h}" rx="3" fill="${fill}"/>`;
+    s += `<text x="${x + bw / 2}" y="${y - 6}" text-anchor="middle" font-size="13" font-weight="700">${opts.fmt ? opts.fmt(v) : v}</text>`;
+    s += `<text x="${x + bw / 2}" y="${H - 14}" text-anchor="middle" font-size="12" fill="#5B6270">${labels[i]}</text>`;
+  });
+  return s + `<line x1="${pad}" x2="${W - pad}" y1="${H - 34}" y2="${H - 34}" stroke="#C9D2E6"/></svg>`;
+}
+
+function svgLines(series, opts = {}) {
+  const W = opts.w || 760, H = opts.h || 240, pad = 40;
+  const n = series[0].data.length, max = Math.max(...series.flatMap(s => s.data), 1e-9) * 1.1;
+  const X = i => pad + i * (W - pad * 2) / Math.max(n - 1, 1), Y = v => H - 30 - (H - 60) * v / max;
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img">`;
+  if (opts.shade) opts.shade.forEach((on, i) => { if (on) s += `<rect x="${X(i) - (W - pad * 2) / n / 2}" y="20" width="${(W - pad * 2) / n}" height="${H - 50}" fill="#FDE2E2"/>`; });
+  series.forEach(sr => {
+    s += `<polyline fill="none" stroke="${sr.color}" stroke-width="${sr.width || 2.5}" ${sr.dash ? 'stroke-dasharray="6 5"' : ''} points="${sr.data.map((v, i) => X(i) + ',' + Y(v)).join(' ')}"/>`;
+  });
+  if (opts.xlabels) opts.xlabels.forEach((l, i) => { if (l !== '') s += `<text x="${X(i)}" y="${H - 10}" text-anchor="middle" font-size="11" fill="#5B6270">${l}</text>`; });
+  let lx = pad;
+  series.forEach(sr => { s += `<rect x="${lx}" y="4" width="14" height="4" fill="${sr.color}"/><text x="${lx + 20}" y="10" font-size="12">${sr.name}</text>`; lx += 28 + sr.name.length * 7; });
+  return s + `</svg>`;
+}
+
+function histogram(h, qty) {
+  const W = 360, H = 150, n = h.length, max = Math.max(...h, 1), bw = (W - 20) / n;
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%">`;
+  h.forEach((v, i) => {
+    const bh = (H - 40) * v / max, x = 10 + i * bw;
+    s += `<rect x="${x + 1}" y="${H - 26 - bh}" width="${bw - 2}" height="${bh}" fill="${i === 0 ? '#C9D2E6' : '#2B59F3'}"/>`;
+  });
+  s += `<text x="10" y="${H - 8}" font-size="11" fill="#5B6270">0 left</text><text x="${W - 10}" y="${H - 8}" font-size="11" fill="#5B6270" text-anchor="end">${qty} left</text>`;
+  return s + '</svg>';
+}
+
+async function load(name) {
+  const r = await fetch('data/' + name + '.json?' + Date.now());
+  if (!r.ok) throw new Error(name);
+  return r.json();
+}
+
+(async () => {
+  let score, acts, truth;
+  try { [score, acts, truth] = await Promise.all([load('scoreboard'), load('actions'), load('demand_truth')]); }
+  catch (e) { $('src').textContent = 'No data yet: run  python -m unwaste.pipeline'; $('src').classList.add('warn'); return; }
+
+  $('src').textContent = 'Data: ' + score.source;
+  if (score.source !== 'FreshRetailNet-50K') $('src').classList.add('warn');
+  $('eng').textContent = score.backends.forecast + ' · ' + score.backends.optimiser;
+  $('win').textContent = `${score.stores} stores · ${score.items} items · replay ${score.replay_window[0]} → ${score.replay_window[1]}`;
+
+  // ---------------- actions ----------------
+  const nights = acts.nights.slice().reverse();
+  $('night').innerHTML = nights.map(n => `<option>${n}</option>`).join('');
+  const stores = [...new Set(acts.actions.map(a => a.store_name))].sort((a, b) => a.localeCompare(b, undefined, {numeric: true}));
+  $('store').innerHTML += stores.map(s => `<option>${s}</option>`).join('');
+  const verb = a => a.action === 'transfer' ? `Transfer ${a.units} → ${a.to_store_name}` : a.action === 'markdown' ? `Mark down 15% (${a.units} at risk)` : `Hold (${a.units} at risk)`;
+  function renderList() {
+    const night = $('night').value, store = $('store').value;
+    const rows = acts.actions.filter(a => a.date === night && (!store || a.store_name === store))
+      .sort((a, b) => b.value_rs - a.value_rs);
+    $('count').textContent = `${rows.length} batch decisions · ₹ at stake ${fmt(Math.round(rows.reduce((t, a) => t + a.value_rs, 0)))}`;
+    $('list').innerHTML = rows.map((a, i) => `
+      <div class="act" data-i="${acts.actions.indexOf(a)}">
+        <div><b>${a.store_name}</b> · Item ${a.product_id}<div class="muted">Batch of ${a.batch_qty} · sell-by ${a.sellby_date || ''}</div></div>
+        <div>${Math.round(100 * a.p_leftover)}% risk<div class="bar"><i style="width:${Math.round(100 * a.p_leftover)}%"></i></div><div class="muted">~${a.median_leftover} units left if we wait</div></div>
+        <div><span class="pill ${a.action}">${verb(a)}</span></div>
+        <div class="money">${a.value_rs > 0 ? '+' + rs(a.value_rs) : '—'}</div>
+      </div>`).join('') || '<p class="muted">No risky batches for this selection.</p>';
+    document.querySelectorAll('.act').forEach(el => el.onclick = () => {
+      document.querySelectorAll('.act').forEach(x => x.classList.remove('sel')); el.classList.add('sel');
+      const a = acts.actions[+el.dataset.i];
+      $('detail').innerHTML = `<h3 style="margin:0 0 4px">${a.store_name} · Item ${a.product_id}</h3>
+        <p class="muted">Batch ${a.batch} · ${a.batch_qty} units · ₹${a.price} each</p>
+        <p><b>${Math.round(100 * a.p_leftover)}%</b> of ${score.config.mc_paths} Monte Carlo replays leave units unsold on the sell-by line.</p>
+        ${histogram(a.hist, a.batch_qty)}
+        <p class="muted">Each bar = how many replays ended with that many units left.</p>
+        <p><span class="pill ${a.action}">${verb(a)}</span></p>
+        <p>${a.action === 'transfer' ? `Gain = ${a.units} × (₹${a.price} − ₹${score.config.transfer_cost_per_unit} transfer − ₹${score.config.salvage_per_unit} salvage) = <b>${rs(a.value_rs)}</b>` :
+           a.action === 'markdown' ? `Expected gain from marking down now: <b>${rs(a.value_rs)}</b>` : 'No option beats waiting: no store had spare demand and a markdown would lose money.'}</p>`;
+    });
+  }
+  $('night').onchange = renderList; $('store').onchange = renderList; renderList();
+
+  // ---------------- scoreboard ----------------
+  const P = score.policies, b = P.baseline, u = P.unwaste, hl = score.headline;
+  $('kpis').innerHTML = `
+    <div class="card"><div class="kpi ${hl.waste_reduction_pct >= 0 ? 'good' : 'bad'}">${hl.waste_reduction_pct >= 0 ? '−' : '+'}${Math.abs(hl.waste_reduction_pct)}%</div><div class="lbl">units wasted vs baseline (${fmt(b.waste_units)} → ${fmt(u.waste_units)})</div></div>
+    <div class="card"><div class="kpi ${hl.service_change_pts >= 0 ? 'good' : 'bad'}">${hl.service_change_pts >= 0 ? '+' : ''}${hl.service_change_pts} pts</div><div class="lbl">service level (${b.service_level_pct}% → ${u.service_level_pct}%)</div></div>
+    <div class="card"><div class="kpi ${hl.net_margin_gain_rs >= 0 ? 'good' : 'bad'}">${hl.net_margin_gain_rs >= 0 ? '+' : ''}${rs(hl.net_margin_gain_rs)}</div><div class="lbl">net margin over ${score.replay_window[0]} → ${score.replay_window[1]}</div></div>
+    <div class="card"><div class="kpi">${u.shelf_life_breaches}</div><div class="lbl">shelf-life breaches (guardrail)</div></div>`;
+  const keys = ['baseline', 'forecast_raw', 'forecast_corrected', 'unwaste'];
+  const cols = [['waste_units', 'Units wasted', fmt], ['waste_pct_of_received', 'Waste %', v => v + '%'], ['service_level_pct', 'Service level', v => v + '%'],
+    ['net_margin_rs', 'Net margin', rs], ['transfer_units', 'Units transferred', fmt], ['early_markdowns', 'Early markdowns', fmt],
+    ['false_move_units', 'False moves', fmt], ['shelf_life_breaches', 'Breaches', fmt]];
+  $('table').innerHTML = `<table><tr><th>Policy</th>${cols.map(c => `<th>${c[1]}</th>`).join('')}</tr>${keys.map(k =>
+    `<tr class="${k === 'unwaste' ? 'win' : ''}"><td>${P[k].label}</td>${cols.map(c => `<td>${c[2](P[k][c[0]])}</td>`).join('')}</tr>`).join('')}</table>`;
+  $('scorenote').textContent = `Train ${score.train_window[0]} → ${score.train_window[1]}, replay ${score.replay_window[0]} → ${score.replay_window[1]} (time split). Every policy faces identical demand. Net margin = sales + salvage − purchases − transfer costs + stock left at cost. Prices, shelf lives and costs are stated assumptions (see config).`;
+  $('chart').innerHTML = `<div class="row"><div style="flex:1;min-width:280px"><b>Waste % of received</b>${svgBars(keys.map(k => P[k].waste_pct_of_received), ['Baseline', 'Raw fcst', '+Correction', 'Unwaste'], {fmt: v => v + '%', colors: ['#9AA3B5', '#9AA3B5', '#9AA3B5', '#2B59F3']})}</div>
+    <div style="flex:1;min-width:280px"><b>Service level %</b>${svgBars(keys.map(k => P[k].service_level_pct), ['Baseline', 'Raw fcst', '+Correction', 'Unwaste'], {fmt: v => v + '%', colors: ['#9AA3B5', '#9AA3B5', '#9AA3B5', '#2B59F3']})}</div></div>`;
+  if (score.sweep && score.sweep.length) {
+    $('sweepwrap').innerHTML = `<h2>Robustness: transfer cost per unit</h2><table><tr><th>Transfer cost</th><th>Units transferred</th><th>Waste %</th><th>Net margin</th></tr>${
+      score.sweep.map(r => `<tr><td>₹${r.transfer_cost_rs}</td><td>${fmt(r.transfer_units)}</td><td>${r.waste_pct_of_received}%</td><td>${rs(r.net_margin_rs)}</td></tr>`).join('')}</table>`;
+  }
+
+  // ---------------- demand truth ----------------
+  $('tkpis').innerHTML = `
+    <div class="card"><div class="kpi bad">${Math.round(100 * truth.wape_naive_zero)}%</div><div class="lbl">error if we trust the zeros</div></div>
+    <div class="card"><div class="kpi">${Math.round(100 * truth.wape_series_average)}%</div><div class="lbl">error with a simple average</div></div>
+    <div class="card"><div class="kpi good">${Math.round(100 * truth.wape_model)}%</div><div class="lbl">error with our fill-in model</div></div>
+    <div class="card"><div class="kpi good">${Math.round(truth.recovered_pct_model)}%</div><div class="lbl">of hidden demand recovered (naive: 0%)</div></div>`;
+  $('tchart').innerHTML = `<p class="muted">${truth.hidden_blocks} full-stock days: we hid every hour from a random afternoon hour to closing, as if the shelf emptied, then asked the model to estimate the hidden demand.</p>` +
+    svgLines([{name: 'True hidden demand', data: truth.sample.truth, color: '#14171F'}, {name: 'Our estimate', data: truth.sample.model, color: '#2B59F3', dash: true},
+              {name: 'Naive (zeros)', data: truth.sample.truth.map(() => 0), color: '#D64545'}]);
+  const ex = truth.example_day;
+  if (ex && ex.observed) {
+    $('dchart').innerHTML = `<p class="muted">Store ${ex.store_id} · Item ${ex.product_id} · ${ex.date}. Red = hours the shelf was empty.</p>` +
+      svgLines([{name: 'Sales recorded', data: ex.observed, color: '#9AA3B5'}, {name: 'Demand after correction', data: ex.corrected, color: '#2B59F3'}],
+               {shade: ex.stockout, xlabels: ex.observed.map((_, i) => i % 3 === 0 ? i + ':00' : '')});
+  }
+})();
+</script>
+</body>
+</html>
