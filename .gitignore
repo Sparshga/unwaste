@@ -8,3 +8,4 @@ data/raw/
 .idea/
 .vscode/
 web/data/*.json
+models/

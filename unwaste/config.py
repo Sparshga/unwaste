@@ -47,7 +47,12 @@ class Config:
     n_estimators: int = 200                      # boosting rounds per model
     use_weather: bool = True                     # rain, temperature, humidity, wind as forecast inputs
     use_festivals: bool = True                   # festival calendar as forecast input (when the data has it)
-    relative_target: bool = False                # predict demand relative to the recent 14-day level
+    relative_target: bool = False
+    calendar_feats: bool = False                 # month + day of month as inputs (needs a year or more of data)
+    late_markdown_units_only: bool = False       # last-day clearance discounts only the expiring batch
+    newsvendor_review_window: bool = False       # order to cover until the next delivery, not the whole shelf life
+    newsvendor_extra_days: int = 0               # ... plus this many days of cushion
+    train_origin_step: int = 1                   # use every k-th day as a training origin (speed on long data)                # predict demand relative to the recent 14-day level
     seed: int = 7
 
     # ---------- policy ----------

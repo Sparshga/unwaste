@@ -99,3 +99,26 @@ def test_align_weather_shifts_year():
     dates = pd.date_range("2024-04-01", periods=97)
     out = align_weather(wx, dates)
     assert out.index.isin(dates).all() or out.index.isin(dates).sum() == 97
+
+
+def test_india_dataset_small():
+    from unwaste.india_data import festival_features, generate
+    df = generate(end="2024-01-31", folder=__import__("pathlib").Path("does-not-exist"))
+    assert len(df) == 10 * 32 * 31
+    assert (df["sales"] <= df["demand_true"]).all()
+    assert set(df["weather_source"]) == {"climate fill"}
+    cal = festival_features(__import__("pandas").date_range("2024-01-10", "2024-01-14"))
+    assert cal.loc["2024-01-13", "days_to_fest"] == 1 and cal.loc["2024-01-14", "holiday"] == 0.0
+
+
+def test_newsvendor_review_window_orders_less():
+    import numpy as np
+    from dataclasses import replace
+    from unwaste.config import default_config
+    from unwaste.decide import newsvendor_order
+    cfg = default_config(review_period_days=1)
+    q = np.full(7, 20.0)
+    rng = np.random.default_rng(0)
+    whole = newsvendor_order([], q * 0.8, q, q * 1.2, 1, 3, 50.0, cfg, rng)
+    short = newsvendor_order([], q * 0.8, q, q * 1.2, 1, 3, 50.0, replace(cfg, newsvendor_review_window=True), np.random.default_rng(0))
+    assert short < whole

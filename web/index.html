@@ -49,6 +49,13 @@
   .grid2{ display:grid; grid-template-columns: 1.5fr 1fr; gap:18px; align-items:start }
   @media (max-width:900px){ .grid2{ grid-template-columns:1fr } .act{ grid-template-columns:1fr 1fr } }
   .hide{ display:none }
+  .navsep{ align-self:center; color:var(--muted); font-size:12px; margin-left:18px }
+  .lv{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; align-items:end }
+  .lv label{ font-size:12px; color:var(--muted); display:block; margin-bottom:4px }
+  .lv input,.lv select{ width:100%; font:inherit; padding:7px 10px; border-radius:6px; border:1px solid var(--line); background:#fff }
+  .go{ background:var(--blue); color:#fff; border:0; border-radius:8px; padding:10px 18px; font:inherit; font-weight:700; cursor:pointer }
+  .scroll{ max-height:420px; overflow:auto; border-radius:10px }
+  td.up{ color:#1C7C3A; font-weight:700 } td.down{ color:var(--red); font-weight:700 }
 </style>
 </head>
 <body>
@@ -59,15 +66,42 @@
   <span class="badge" id="win"></span>
 </header>
 <nav>
-  <button data-tab="actions" class="on">Store actions</button>
+  <button data-tab="live" class="on">Predict tomorrow</button>
+  <button data-tab="imain">India results</button>
+  <span class="navsep">FreshRetailNet validation:</span>
+  <button data-tab="actions">Store actions</button>
   <button data-tab="score">Replay scoreboard</button>
   <button data-tab="truth">Demand-truth test</button>
   <button data-tab="proof">Proof tests</button>
-  <button data-tab="india">India &amp; weather</button>
+  <button data-tab="india">Stress tests</button>
 </nav>
 <main>
+  <!-- ======================= LIVE ======================= -->
+  <section id="tab-live">
+    <div class="card">
+      <div class="lv">
+        <div><label>Day to plan for</label><select id="lv-date"></select></div>
+        <div><label>Temperature °C</label><input id="lv-temp" type="number" step="0.1"></div>
+        <div><label>Rain mm</label><input id="lv-rain" type="number" step="0.1" min="0"></div>
+        <div><label>Humidity %</label><input id="lv-hum" type="number" step="1" min="0" max="100"></div>
+        <div><label>Festival / holiday</label><select id="lv-fest"></select></div>
+        <div><label>Size</label><select id="lv-size"><option value="1">Major</option><option value="0.5">Minor</option></select></div>
+        <div><label>Price change: category</label><select id="lv-pcat"></select></div>
+        <div><label>Price change %</label><input id="lv-pct" type="number" step="1" placeholder="e.g. 20 or -15"></div>
+        <div><button class="go" id="lv-go">Predict</button></div>
+      </div>
+      <p class="muted" id="lv-src" style="margin:10px 0 0"></p>
+    </div>
+    <div id="lv-out"><p class="muted">Start the server with <code>uvicorn unwaste.api:app --port 8000</code> and open this page from it.</p></div>
+  </section>
+
+  <!-- ======================= INDIA RESULTS ======================= -->
+  <section id="tab-imain" class="hide">
+    <div id="imain"><p class="muted">No results yet: run <code>python -m unwaste.india_data</code> then <code>python -m unwaste.india_pipeline</code></p></div>
+  </section>
+
   <!-- ======================= ACTIONS ======================= -->
-  <section id="tab-actions">
+  <section id="tab-actions" class="hide">
     <div class="controls">
       <label>Night <select id="night"></select></label>
       <label>Store <select id="store"><option value="">All stores</option></select></label>
@@ -116,7 +150,7 @@ const $ = id => document.getElementById(id);
 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
-  ['actions','score','truth','proof','india'].forEach(t => $('tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
+  ['live','imain','actions','score','truth','proof','india'].forEach(t => $('tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
 });
 
 function svgBars(values, labels, opts = {}) {
@@ -225,6 +259,95 @@ function radarFix(i, v) {
   if (el) el.textContent = fmt(Math.round(e.base_units * (parseFloat(v) || 0) / 100));
 }
 
+// ======================= INDIA RESULTS =======================
+function renderIMain(m) {
+  const r = m.replay, b = r.baseline, u = r.unwaste, f = m.forecast, ds = m.dataset, kpi = (v, l, c) => `<div class="card"><div class="kpi ${c || ''}">${v}</div><div class="lbl">${l}</div></div>`;
+  const wd = ds.weather_days || {}, real = wd['open-meteo'] || 0;
+  let h = `<h2>Unwaste-India: trained ${ds.start} → ${ds.train_end}, tested on the next ${ds.test_days} days</h2>
+    <p class="muted">${fmt(ds.rows)} rows · ${ds.stores} Delhi-NCR stores × ${ds.items} perishable items × ${ds.days} days.
+    Real: weather (Open-Meteo on ${fmt(real)} of ${fmt(ds.days)} days) and the festival calendar. Generated: demand, prices, promotions, stockouts.
+    The replay uses true demand as reality; the policies only see sales.</p>
+    <div class="row">${kpi(b.waste_pct_of_received + '% → ' + u.waste_pct_of_received + '%', 'waste: ordering by habit → Unwaste', u.waste_pct_of_received <= b.waste_pct_of_received ? 'good' : '')}
+      ${kpi(b.service_level_pct + '% → ' + u.service_level_pct + '%', 'service level (demand served)', 'good')}
+      ${kpi(rs(m.headline.net_after_lost_gain_rs), 'net margin gain after lost-sale cost', m.headline.net_after_lost_gain_rs >= 0 ? 'good' : 'bad')}</div>
+    <h2>Forecast error on the test days (lower is better)</h2>
+    <table><tr><th>Forecast</th><th>All days</th><th>Festival days (3 days before + the day)</th></tr>
+      <tr class="win"><td>Unwaste: weather + festivals + price</td><td>${f.all.ours}%</td><td>${f.festival_days.ours}%</td></tr>
+      <tr><td>Same model, no festival calendar</td><td>${f.all.no_calendar}%</td><td>${f.festival_days.no_calendar}%</td></tr>
+      <tr><td>7-day average</td><td>${f.all.avg_7d}%</td><td>${f.festival_days.avg_7d}%</td></tr>
+      <tr><td>Same weekday last week</td><td>${f.all.same_weekday}%</td><td>${f.festival_days.same_weekday}%</td></tr></table>
+    <p class="muted">Low–high range catches ${f.coverage_p10_p90}% of actual days (aim: 80%).</p>`;
+  const c = m.chart;
+  const fset = new Set(c.festivals.map(x => x.date));
+  h += `<div class="card" style="margin-top:14px"><b>All stores, units per day: actual vs Unwaste's next-day forecast</b>${svgLines([
+      {name: 'Actual', data: c.actual, color: '#14171F', width: 2},
+      {name: 'Unwaste forecast', data: c.p50, color: '#2B59F3'},
+      {name: '7-day average', data: c.avg_7d, color: '#9AA3B5', dash: true, width: 2}],
+      {h: 280, shade: c.dates.map(d => fset.has(d)), xlabels: c.dates.map(d => { const fe = c.festivals.find(x => x.date === d); return fe ? fe.name.split(' ')[0] : ''; })})}
+    <p class="muted">Shaded = festival days. The 7-day average reacts after the surge; Unwaste sees it coming from the calendar.</p></div>`;
+  if (f.per_festival.length) h += `<h2>Each festival in the test window</h2><table><tr><th>Festival</th><th>Date</th><th>Unwaste</th><th>No calendar</th><th>7-day average</th></tr>${
+    f.per_festival.map(x => `<tr><td>${x.festival}</td><td>${x.date}</td><td><b>${x.ours}%</b></td><td>${x.no_calendar}%</td><td>${x.avg_7d}%</td></tr>`).join('')}</table>`;
+  h += `<h2>Hidden demand on empty-shelf days</h2><div class="row">
+      ${kpi(m.fill_in.stockout_days_pct + '%', 'of store-item-days had an empty shelf for some hours')}
+      ${kpi(m.fill_in.error_sales_as_demand + '% → ' + m.fill_in.error_filled + '%', 'error vs true demand on those days: sales as-is → filled in', 'good')}</div>
+    <h2>Replay: the same true demand, three ways of ordering</h2>
+    <table><tr><th>Policy</th><th>Waste %</th><th>Service %</th><th>Net after lost-sale cost</th><th>Units moved</th><th>Shelf-life breaches</th></tr>${
+      ['baseline', 'forecast_corrected', 'unwaste'].map(k => `<tr class="${k === 'unwaste' ? 'win' : ''}"><td>${r[k].label}</td><td>${r[k].waste_pct_of_received}%</td><td>${r[k].service_level_pct}%</td><td>${rs(r[k].net_after_lost_sales_rs)}</td><td>${fmt(r[k].transfer_units || 0)}</td><td>${r[k].shelf_life_breaches ?? 0}</td></tr>`).join('')}</table>
+    ${m.dial ? `<h2>The service dial: fewer empty shelves costs a little more waste</h2><table><tr><th>Order at least the … of tomorrow's demand</th><th>Waste %</th><th>Service %</th><th>Net after lost-sale cost</th></tr>${
+      m.dial.map(x => `<tr><td>${Math.round(100 * x.service_floor)}th percentile</td><td>${x.waste_pct}%</td><td>${x.service_pct}%</td><td>${rs(x.net_after_lost_rs)}</td></tr>`).join('')}</table>` : ''}
+    <p class="muted">Forecast inputs: ${m.features.join(', ')}. Engine: ${m.backends.forecast} · ${m.backends.optimiser}.</p>`;
+  $('imain').innerHTML = h;
+}
+
+// ======================= PREDICT TOMORROW =======================
+let LV = null;
+async function liveInit() {
+  try { const r = await fetch('/api/live/context'); if (!r.ok) throw new Error(await r.text()); LV = await r.json(); }
+  catch (e) { $('lv-out').innerHTML = `<p class="muted">Live model not available: run <code>python -m unwaste.india_pipeline</code>, then start <code>uvicorn unwaste.api:app --port 8000</code> and open this page from it.</p>`; return; }
+  $('lv-date').innerHTML = LV.days.map((d, i) => `<option value="${d}">${d}${i === 0 ? ' (tomorrow)' : ''}</option>`).join('');
+  $('lv-pcat').innerHTML = '<option value="">none</option>' + LV.categories.map(c => `<option>${c}</option>`).join('');
+  const prefill = () => {
+    const i = LV.days.indexOf($('lv-date').value), w = LV.weather[i], c = LV.calendar[i];
+    $('lv-temp').value = w.temp; $('lv-rain').value = w.rain; $('lv-hum').value = w.humidity;
+    const auto = c.fest_name ? `auto: ${c.fest_name}${c.days_to_fest ? ' in ' + c.days_to_fest + ' day' + (c.days_to_fest > 1 ? 's' : '') : ' (today)'}` : 'auto: none in the next 7 days';
+    $('lv-fest').innerHTML = `<option value="auto">${auto}</option><option value="none">no festival</option>` +
+      LV.fest_types.filter(t => t !== 'none').map(t => `<option value="${t}">${t} (on this day)</option>`).join('');
+  };
+  $('lv-date').onchange = prefill; prefill();
+  $('lv-src').textContent = `History up to ${LV.last_day}. Weather: ${LV.weather_source}. Model built ${LV.built}.`;
+  $('lv-go').onclick = liveRun;
+  liveRun();
+}
+async function liveRun() {
+  const cat = $('lv-pcat').value, pct = $('lv-pct').value;
+  const body = {target: $('lv-date').value,
+    weather: {temp: $('lv-temp').value, rain: $('lv-rain').value, humidity: $('lv-hum').value},
+    festival: {type: $('lv-fest').value, size: parseFloat($('lv-size').value)},
+    price_change: cat && pct !== '' ? {[cat]: parseFloat(pct)} : {}};
+  $('lv-out').innerHTML = '<p class="muted">Predicting…</p>';
+  const r = await fetch('/api/live/predict', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  if (!r.ok) { $('lv-out').innerHTML = `<p class="muted">Error: ${await r.text()}</p>`; return; }
+  renderLive(await r.json());
+}
+function renderLive(p) {
+  const k = p.kpi, w = p.weather_used, fe = p.festival_used, kpi = (v, l, c) => `<div class="card"><div class="kpi ${c || ''}">${v}</div><div class="lbl">${l}</div></div>`;
+  const fest = fe.fest_name ? `${fe.fest_name} ${fe.days_to_fest ? 'in ' + fe.days_to_fest + ' day(s)' : 'today'}` : 'no festival';
+  let h = `<h2>Plan for ${p.target}: ${w.temp}°C, ${w.rain} mm rain, ${fest}</h2>
+    <div class="row">${kpi(fmt(k.demand) + ' units', `expected demand, all stores (${signed(k.change_pct, '%')} vs a normal day)`, k.change_pct >= 0 ? 'good' : 'bad')}
+      ${kpi(fmt(k.order_units), 'units to order tonight, all stores')}
+      ${kpi(fmt(k.risky_batches), 'batches likely to be left over')}
+      ${kpi(fmt(k.transfers), `units to move between stores · ${k.markdowns} early markdowns`)}</div>
+    <div class="card" style="margin-top:14px"><b>Next 7 days, all stores (units per day)</b>${svgLines([
+      {name: 'Expected', data: p.totals.p50, color: '#2B59F3'}, {name: 'High (P90)', data: p.totals.p90, color: '#9DB4F7', width: 1.5},
+      {name: 'Low (P10)', data: p.totals.p10, color: '#9DB4F7', width: 1.5}, {name: 'Normal day', data: p.totals.normal, color: '#9AA3B5', dash: true, width: 2}],
+      {h: 240, shade: p.days.map((d, i) => i === p.k), xlabels: p.days.map(d => d.slice(5))})}</div>
+    <h2>By item, ${p.target}</h2><div class="scroll"><table><tr><th>Item</th><th>Normal day</th><th>Expected (low–high)</th><th>Change</th><th>Order tonight</th><th>On hand now</th><th>Shelf life</th></tr>${
+      p.items.map(x => `<tr><td>${x.item}</td><td>${fmt(Math.round(x.normal))}</td><td><b>${fmt(Math.round(x.p50))}</b> <span class="muted">(${fmt(Math.round(x.p10))}–${fmt(Math.round(x.p90))})</span></td><td class="${x.change_pct > 3 ? 'up' : x.change_pct < -3 ? 'down' : ''}">${signed(x.change_pct, '%')}</td><td><b>${fmt(x.order)}</b></td><td>${fmt(x.on_hand)}</td><td>${x.shelf_life} d</td></tr>`).join('')}</table></div>`;
+  if (p.actions.length) h += `<h2>Tonight's actions on risky batches</h2><table><tr><th>Action</th><th>Item</th><th>Store</th><th>Units</th><th>Chance left over</th><th>Sell-by</th><th>Value</th></tr>${
+      p.actions.map(a => `<tr><td><span class="pill ${a.action}">${a.action}</span></td><td>${a.item}</td><td>${a.store}${a.to_store ? ' → ' + a.to_store : ''}</td><td>${fmt(a.units)}</td><td>${Math.round(100 * a.p_leftover)}%</td><td>${a.sellby}</td><td>${rs(a.value_rs)}</td></tr>`).join('')}</table>`;
+  $('lv-out').innerHTML = h;
+}
+
 async function load(name) {
   const r = await fetch('data/' + name + '.json?' + Date.now());
   if (!r.ok) throw new Error(name);
@@ -312,6 +435,7 @@ async function load(name) {
   }
   // ---------------- India & weather (Phase 3, optional) ----------------
   try { renderIndia(await load('india')); } catch (e) { /* not run yet */ }
+  try { renderIMain(await load('india_main')); } catch (e) { /* not run yet */ }
 
   // ---------------- proof tests (Phase 2, optional) ----------------
   let proof = null;

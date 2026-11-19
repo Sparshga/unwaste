@@ -34,7 +34,12 @@ def newsvendor_order(batches: list[Batch], q10, q50, q90, arrival: int, sellable
     paths = np.round(sample_from_quantiles(q10, q50, q90, cfg.mc_paths, rng))
     sim = simulate_fefo(batches, paths, arrival) if batches else {"lost_by_day": paths}
     residual = sim["lost_by_day"]                       # demand existing stock can't serve
-    sell_window = residual[:, :min(sellable_days, H)].sum(axis=1)
+    win = min(sellable_days, H)
+    if getattr(cfg, "newsvendor_review_window", False):
+        # with frequent deliveries this batch only has to last until the next one arrives;
+        # leftovers still sell first (FEFO) and the next order sees them
+        win = min(win, cfg.review_period_days + getattr(cfg, "newsvendor_extra_days", 0))
+    sell_window = residual[:, :win].sum(axis=1)
     cover = residual[:, :min(cfg.review_period_days, sellable_days, H)].sum(axis=1)  # demand this batch can legally serve
     cost = cfg.cost_ratio * price
     penalty = cfg.lost_sale_penalty_frac * price

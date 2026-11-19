@@ -10,7 +10,7 @@ Run:  uvicorn unwaste.api:app --port 8000     then open http://localhost:8000
 import json
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 
 WEB = Path(__file__).resolve().parent.parent / "web"
@@ -40,6 +40,26 @@ def actions(store: str | None = None, night: str | None = None):
 @app.get("/api/demand-truth")
 def demand_truth():
     return _read("demand_truth")
+
+
+@app.get("/api/live/context")
+def live_context():
+    """Next 7 days: live weather forecast, festival calendar, categories (Predict tomorrow tab)."""
+    from . import live
+    try:
+        return live.context()
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/live/predict")
+def live_predict(inputs: dict = Body(default={})):
+    """Inputs typed on the screen -> demand for the next 7 days + tonight's plan."""
+    from . import live
+    try:
+        return live.predict(inputs)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
 
 
 app.mount("/", StaticFiles(directory=WEB, html=True), name="web")

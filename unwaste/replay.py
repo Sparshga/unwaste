@@ -61,6 +61,7 @@ class Ledger:
     lost_value: float = 0.0          # lost units x price
     penalty_frac: float = 0.5
     actions: list = field(default_factory=list)
+    final_stock: list | None = None   # batches on hand at the end (live demo starts from here)
 
     def summary(self) -> dict:
         # stock still on the shelf at the end is valued at cost, so ordering more isn't penalised unfairly
@@ -119,9 +120,11 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
         for s in range(nS):
             batches = [b for b in stock[s] if b.arrival <= t and b.qty > 0]
             md = 0.0
+            late_today = policy.late_markdown and any(b.sellby == t for b in batches)
+            units_only = getattr(cfg, "late_markdown_units_only", False)
             if t <= markdown_until[s]:
                 md = cfg.markdown_frac
-            elif policy.late_markdown and any(b.sellby == t for b in batches):
+            elif late_today and not units_only:
                 md = cfg.late_markdown_frac
                 led.late_markdowns += 1
             uplift = 1 + cfg.markdown_uplift_per_10pct * (md / 0.10)
@@ -134,11 +137,12 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
                 take = min(b.qty, want - sold)
                 b.qty -= take
                 sold += take
+                disc = cfg.late_markdown_frac if (units_only and late_today and md == 0 and b.sellby == t) else md
+                led.revenue += take * price[s] * (1 - disc)
                 if sold >= want:
                     break
             led.demand += base_want
             led.served += min(sold, base_want)
-            led.revenue += sold * price[s] * (1 - md)
             lost_today[s] = max(0, base_want - sold)
             led.lost_units += lost_today[s]
             led.lost_value += lost_today[s] * price[s]
@@ -166,6 +170,7 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
         if t == T - 1:
             for s in range(nS):
                 led.ending_stock_value += sum(b.qty for b in stock[s]) * unit_cost[s]
+            led.final_stock = stock
             break
 
         # ---------------- nightly decisions ----------------

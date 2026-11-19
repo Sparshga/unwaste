@@ -30,11 +30,13 @@ def to_matrix(daily: pd.DataFrame, value: str) -> tuple[np.ndarray, pd.DatetimeI
 
 WEATHER = ["rain", "temp", "humidity", "wind"]
 FEST = ["days_to_fest", "fest_weight"]   # from the public festival calendar, known weeks ahead
+INDIA = ["fest_type_code", "price_idx"]  # festival kind + the item's own price vs normal (Unwaste-India)
+CAL = ["month", "dom"]                   # month and day of month of the target day (yearly data only)
 
 
 def exo_matrices(daily: pd.DataFrame) -> dict:
     out = {}
-    for c in ["discount", "holiday", "activity"] + [w for w in WEATHER + FEST if w in daily.columns]:
+    for c in ["discount", "holiday", "activity"] + [w for w in WEATHER + FEST + INDIA if w in daily.columns]:
         out[c] = daily.pivot_table(index="series_id", columns="dt", values=c, aggfunc="mean") \
             .sort_index().sort_index(axis=1).fillna(0).to_numpy()
     return out
@@ -51,7 +53,8 @@ def _origin_features(Y: np.ndarray, o: int) -> dict:
                 "sd14": np.nanstd(Y[:, max(0, o - 13):o + 1], axis=1)}
 
 
-def _build_rows(Y, exo, dates, origins, H, series_codes):
+def _build_rows(Y, exo, dates, origins, H, series_codes, exo_future=None, calendar=False):
+    """exo_future (optional): {column: [S, H]} values for the days after the data (live prediction)."""
     S, T = Y.shape
     blocks = []
     for o in origins:
@@ -65,14 +68,19 @@ def _build_rows(Y, exo, dates, origins, H, series_codes):
                 warnings.simplefilter("ignore", RuntimeWarning)
                 sd = np.nanmean(same_dow, axis=0) if same_dow else base["m7"]
             sd = np.where(np.isnan(sd), base["m7"], sd)
+            ex = (lambda c: exo_future[c][:, t - T]) if (exo_future is not None and t >= T) \
+                else (lambda c: exo[c][:, tt])
             blk = {**base, "h": np.full(S, h), "dow": np.full(S, dow),
                    "same_dow": sd,
-                   "discount": exo["discount"][:, tt], "holiday": exo["holiday"][:, tt],
-                   "activity": exo["activity"][:, tt],
-                   **{w: exo[w][:, tt] for w in WEATHER + FEST if w in exo},
+                   "discount": ex("discount"), "holiday": ex("holiday"),
+                   "activity": ex("activity"),
+                   **{w: ex(w) for w in WEATHER + FEST + INDIA if w in exo},
                    "store": series_codes[0], "product": series_codes[1],
                    "series": np.arange(S), "origin": np.full(S, o),
                    "target": Y[:, t] if t < T else np.full(S, np.nan)}
+            if calendar:
+                day = dates[o] + pd.Timedelta(days=h)
+                blk["month"], blk["dom"] = np.full(S, day.month), np.full(S, day.day)
             blocks.append(pd.DataFrame(blk))
     return pd.concat(blocks, ignore_index=True)
 
@@ -95,8 +103,10 @@ def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "
     codes = (meta["store_id"].astype("category").cat.codes.to_numpy(),
              meta["product_id"].astype("category").cat.codes.to_numpy())
     train_end = T - cfg.test_days - 1                     # last training day index
-    train_origins = [o for o in range(14, train_end) if o + 1 <= train_end]
-    train = _build_rows(Y, exo, dates, train_origins, H, codes)
+    step = getattr(cfg, "train_origin_step", 1)
+    train_origins = [o for o in range(14, train_end, step) if o + 1 <= train_end]
+    cal = getattr(cfg, "calendar_feats", False)
+    train = _build_rows(Y, exo, dates, train_origins, H, codes, calendar=cal)
     train = train[train["origin"] + train["h"] <= train_end]
     train = train.dropna(subset=["target"])
     if train_mask is not None:
@@ -107,10 +117,16 @@ def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "
         exo_test = {k: v.copy() for k, v in exo.items()}
         for k, vec in weather_override.items():
             exo_test[k][:, train_end + 1:] = np.asarray(vec)[None, train_end + 1:]
-    test = _build_rows(Y, exo_test, dates, test_origins, H, codes)
+    test = _build_rows(Y, exo_test, dates, test_origins, H, codes, calendar=cal)
     feats = FEATS if (cfg.use_weather and all(w in train.columns for w in WEATHER)) else BASE_FEATS
     if cfg.use_festivals and all(f in train.columns for f in FEST):
         feats = feats + FEST
+        if "fest_type_code" in train.columns:
+            feats = feats + ["fest_type_code"]
+    if "price_idx" in train.columns:
+        feats = feats + ["price_idx"]
+    if cal:
+        feats = feats + CAL
     if cfg.relative_target:
         # predict demand RELATIVE to the item's recent level (last 14 days), then scale back.
         # Trees can't extrapolate, so this lets forecasts follow sudden level shifts
@@ -122,10 +138,11 @@ def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "
         train["target"] = train["target"] / train["level"]
         feats = feats + ["level"]
 
-    out = {}
+    out, models = {}, {}
     for q in cfg.quantiles:
         m = quantile_model(q, seed=cfg.seed, n_estimators=cfg.n_estimators)
         m.fit(train[feats].to_numpy(), train["target"].to_numpy())
+        models[q] = m
         pred = np.clip(m.predict(test[feats].to_numpy()), 0, None)
         if cfg.relative_target:
             pred = pred * test["level"].to_numpy()
@@ -148,5 +165,6 @@ def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "
               f"actuals inside P10-P90: {inside:.0%} (ideal ~80%)")
     out["train_end"] = train_end
     out["features"] = feats
+    out["models"], out["codes"], out["calendar"] = models, codes, cal
     out["metrics"] = {"wape_h1": float(wape), "coverage_p10_p90": float(inside)}
     return out
