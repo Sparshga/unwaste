@@ -90,3 +90,12 @@ def test_open_meteo_and_agmarknet_loaders(tmp_path):
         .to_csv(tmp_path / "agmarknet_tomato.csv", index=False)
     agm = load_agmarknet(tmp_path)
     assert agm["Tomato"]["price"].tolist() == [1500.0, 4500.0]
+
+
+def test_align_weather_shifts_year():
+    import pandas as pd
+    from unwaste.india import align_weather
+    wx = pd.DataFrame({"rain": range(366)}, index=pd.date_range("2023-01-01", periods=366))
+    dates = pd.date_range("2024-04-01", periods=97)
+    out = align_weather(wx, dates)
+    assert out.index.isin(dates).all() or out.index.isin(dates).sum() == 97

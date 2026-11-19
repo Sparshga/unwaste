@@ -135,8 +135,24 @@ def weather_in_forecast(Y, daily, cfg) -> tuple[dict, dict]:
 
 
 # ----------------------------------------------------------------------------- 2. Indian weather what-if
+def align_weather(wx: pd.DataFrame, dates: pd.DatetimeIndex) -> pd.DataFrame:
+    """If the weather file is for another year, shift it onto the dataset's calendar days."""
+    dates = pd.DatetimeIndex(dates)
+    if wx.index.isin(dates).sum() < 0.5 * len(dates):
+        shift = dates[0].year - wx.index[0].year
+        wx = wx.copy()
+        wx.index = wx.index + pd.DateOffset(years=shift)
+        wx = wx[~wx.index.duplicated()]
+        print(f"[india] weather file shifted by {shift:+d} year(s) to match the dataset's calendar days")
+    if wx.index.isin(dates).sum() == 0:
+        raise ValueError("Weather file does not cover the dataset's calendar days; download the full year")
+    return wx
+
+
 def indian_weather_whatif(Y, Y_raw, daily, meta, dates, F_w, wx: pd.DataFrame, cfg) -> dict:
     te = F_w["train_end"]
+    dates = pd.DatetimeIndex(dates)
+    wx = align_weather(wx, dates)
     override, used = {}, {}
     for w in WEATHER:
         base = daily.pivot_table(index="series_id", columns="dt", values=w, aggfunc="mean").mean(axis=0)
