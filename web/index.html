@@ -93,13 +93,18 @@
       </div>
       <p class="muted" id="lv-src" style="margin:10px 0 0"></p>
     </div>
+    <div class="controls" id="lv-filters" style="margin-top:14px">
+      <label class="muted">Store</label><select id="lv-store"></select>
+      <label class="muted">Item</label><select id="lv-item"></select>
+      <span class="muted">Filters change the view instantly; Predict again only when weather, festival or price changes.</span>
+    </div>
     <div id="lv-out"><p class="muted">Start the server with <code>uvicorn unwaste.api:app --port 8000</code> and open this page from it.</p></div>
   </section>
 
   <!-- ======================= INDIA STORE ACTIONS ======================= -->
   <section id="tab-iact" class="hide">
     <div class="controls">
-      <label class="muted">Store</label><select id="ia-store"><option value="">All stores</option></select>
+      <span class="muted" id="ia-filter"></span>
       <label class="muted">Show</label><select id="ia-show"><option value="risk">Act or watch</option><option value="all">Every batch on hand</option></select>
       <span class="muted" id="ia-count"></span>
     </div>
@@ -344,16 +349,17 @@ async function liveRun() {
   const r = await fetch('/api/live/predict', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   if (!r.ok) { $('lv-out').innerHTML = `<p class="muted">Error: ${await r.text()}</p>`; return; }
   const p = await r.json();
+  LVP = p;
   renderLive(p); renderIAct(p);
 }
 function renderIAct(p) {
-  const st = $('ia-store'), keep = st.value;
-  st.innerHTML = '<option value="">All stores</option>' + p.stores.map(s => `<option>${s}</option>`).join(''); st.value = keep;
+  const f = flt();
+  $('ia-filter').innerHTML = `<b>${filterLabel(f)}</b> (change on the Predict tomorrow tab) ·`;
   const verb = b => b.action === 'transfer' ? `Transfer ${b.units} → ${b.to_store}` : b.action === 'markdown' ? `Mark down 15% now` :
     b.action === 'hold' ? 'Hold: no better option' : b.action === 'clearance' ? 'Last-day clearance' : b.action === 'watch' ? 'Watch' : 'OK';
   const pill = b => ({transfer: 'transfer', markdown: 'markdown', hold: 'hold', clearance: 'markdown', watch: 'hold', ok: 'hold'})[b.action];
   const draw = () => {
-    const rows = p.batches.filter(b => (!st.value || b.store === st.value) && ($('ia-show').value === 'all' || b.action !== 'ok'));
+    const rows = p.batches.filter(b => matchS({...b, cat: catOf(p, b.item)}, f) && ($('ia-show').value === 'all' || b.action !== 'ok'));
     $('ia-count').textContent = `${rows.length} of ${p.n_batches} batches on hand tonight · plan for ${p.target} · ${rows.filter(b => ['transfer', 'markdown'].includes(b.action)).length} actions · stock: ${p.stock_source}`;
     $('ia-list').innerHTML = rows.map((b, i) => `<div class="act" data-i="${p.batches.indexOf(b)}">
         <div><b>${b.store}</b> · ${b.item}<div class="muted">Batch of ${b.qty} · arrived ${b.arrived} · sell-by ${b.sellby} (${b.days_left} day${b.days_left === 1 ? '' : 's'})</div></div>
@@ -375,24 +381,65 @@ function renderIAct(p) {
           b.action === 'watch' ? 'Some risk, below the 60% line where Unwaste acts. Re-checked tomorrow night.' : 'Expected to sell before its sell-by line.'}</p>`;
     });
   };
-  st.onchange = draw; $('ia-show').onchange = draw; draw();
+  $('ia-show').onchange = draw; draw();
 }
+const DEFAULT_STORE = 'Gurugram Sector 45';
+let LVP = null;
+function initFilters(p) {
+  const st = $('lv-store'), it = $('lv-item');
+  if (st.options.length) return;
+  st.innerHTML = '<option value="">All stores</option>' + p.stores.map(s => `<option>${s}</option>`).join('');
+  st.value = p.stores.includes(DEFAULT_STORE) ? DEFAULT_STORE : '';
+  const cats = [...new Set(p.series.map(x => x.cat))].sort(), items = [...new Set(p.series.map(x => x.item))].sort();
+  it.innerHTML = '<option value="">All items</option>' + cats.map(c => `<option value="cat:${c}">All ${c.replace('_', ' & ')}</option>`).join('') +
+    items.map(i => `<option>${i}</option>`).join('');
+  const redraw = () => { renderLive(LVP); renderIAct(LVP); };
+  st.onchange = redraw; it.onchange = redraw;
+}
+function flt() { return {store: $('lv-store').value, item: $('lv-item').value}; }
+function inItem(item, cat, f) { return !f.item || item === f.item || (f.item.startsWith('cat:') && cat === f.item.slice(4)); }
+function matchS(x, f) { return (!f.store || x.store === f.store) && inItem(x.item, x.cat, f); }
+function catOf(p, item) { const s = p.series.find(x => x.item === item); return s ? s.cat : ''; }
+function filterLabel(f) { return `${f.store || 'All stores'} · ${!f.item ? 'all items' : f.item.startsWith('cat:') ? 'all ' + f.item.slice(4).replace('_', ' & ') : f.item}`; }
+
 function renderLive(p) {
-  const k = p.kpi, w = p.weather_used, fe = p.festival_used, kpi = (v, l, c) => `<div class="card"><div class="kpi ${c || ''}">${v}</div><div class="lbl">${l}</div></div>`;
+  initFilters(p);
+  const f = flt(), K = p.k, w = p.weather_used, fe = p.festival_used;
+  const kpi = (v, l, c) => `<div class="card"><div class="kpi ${c || ''}">${v}</div><div class="lbl">${l}</div></div>`;
+  const S = p.series.filter(x => matchS(x, f));
+  const sum = (arr, key, d) => arr.reduce((t, x) => t + (d === undefined ? x[key] : x[key][d]), 0);
+  const demand = sum(S, 'p50', K), normal = sum(S, 'normal', K), chg = normal ? Math.round(1000 * (demand / normal - 1)) / 10 : 0;
+  const acts = p.actions.filter(a => (!f.store || a.store === f.store || a.to_store === f.store) && inItem(a.item, catOf(p, a.item), f));
+  const risky = p.batches.filter(b => matchS({...b, cat: catOf(p, b.item)}, f) && ['transfer', 'markdown', 'hold'].includes(b.action)).length;
+  const moveOut = acts.filter(a => a.action === 'transfer' && (!f.store || a.store === f.store)).reduce((t, a) => t + a.units, 0);
+  const moveIn = f.store ? acts.filter(a => a.action === 'transfer' && a.to_store === f.store).reduce((t, a) => t + a.units, 0) : 0;
   const fest = fe.fest_name ? `${fe.fest_name} ${fe.days_to_fest ? 'in ' + fe.days_to_fest + ' day(s)' : 'today'}` : 'no festival';
-  let h = `<h2>Plan for ${p.target}: ${w.temp}°C, ${w.rain} mm rain, ${fest}</h2>
-    <div class="row">${kpi(fmt(k.demand) + ' units', `expected demand, all stores (${signed(k.change_pct, '%')} vs a normal day)`, k.change_pct >= 0 ? 'good' : 'bad')}
-      ${kpi(fmt(k.order_units), 'units to order tonight, all stores')}
-      ${kpi(fmt(k.risky_batches), 'batches likely to be left over')}
-      ${kpi(fmt(k.transfers), `units to move between stores · ${k.markdowns} early markdowns`)}</div>
-    <div class="card" style="margin-top:14px"><b>Next 7 days, all stores (units per day)</b>${svgLines([
-      {name: 'Expected', data: p.totals.p50, color: '#2B59F3'}, {name: 'High (P90)', data: p.totals.p90, color: '#9DB4F7', width: 1.5},
-      {name: 'Low (P10)', data: p.totals.p10, color: '#9DB4F7', width: 1.5}, {name: 'Normal day', data: p.totals.normal, color: '#9AA3B5', dash: true, width: 2}],
-      {h: 240, shade: p.days.map((d, i) => i === p.k), xlabels: p.days.map(d => d.slice(5))})}</div>
-    <h2>By item, ${p.target}</h2><div class="scroll"><table><tr><th>Item</th><th>Normal day</th><th>Expected (low–high)</th><th>Change</th><th>Order tonight</th><th>On hand now</th><th>Shelf life</th></tr>${
-      p.items.map(x => `<tr><td>${x.item}</td><td>${fmt(Math.round(x.normal))}</td><td><b>${fmt(Math.round(x.p50))}</b> <span class="muted">(${fmt(Math.round(x.p10))}–${fmt(Math.round(x.p90))})</span></td><td class="${x.change_pct > 3 ? 'up' : x.change_pct < -3 ? 'down' : ''}">${signed(x.change_pct, '%')}</td><td><b>${fmt(x.order)}</b></td><td>${fmt(x.on_hand)}</td><td>${x.shelf_life} d</td></tr>`).join('')}</table></div>`;
-  if (p.actions.length) h += `<h2>Tonight's actions on risky batches</h2><table><tr><th>Action</th><th>Item</th><th>Store</th><th>Units</th><th>Chance left over</th><th>Sell-by</th><th>Value</th></tr>${
-      p.actions.map(a => `<tr><td><span class="pill ${a.action}">${a.action}</span></td><td>${a.item}</td><td>${a.store}${a.to_store ? ' → ' + a.to_store : ''}</td><td>${fmt(a.units)}</td><td>${Math.round(100 * a.p_leftover)}%</td><td>${a.sellby}</td><td>${rs(a.value_rs)}</td></tr>`).join('')}</table>`;
+  const single = S.length === 1;
+  const days = d => S.reduce((t, x) => t + x[d], 0);
+  const tot = key => p.days.map((_, d) => Math.round(S.reduce((t, x) => t + x[key][d], 0)));
+  const lines = [{name: 'Expected (P50)', data: tot('p50'), color: '#2B59F3'}, {name: 'Normal day', data: tot('normal'), color: '#9AA3B5', dash: true, width: 2}];
+  if (single) lines.push({name: 'High (P90)', data: tot('p90'), color: '#9DB4F7', width: 1.5}, {name: 'Low (P10)', data: tot('p10'), color: '#9DB4F7', width: 1.5});
+  let h = `<h2>Plan for ${p.target} · ${filterLabel(f)}: ${w.temp}°C, ${w.rain} mm rain, ${fest}</h2>
+    <div class="row">${kpi(fmt(Math.round(demand)) + ' units', `expected demand (${signed(chg, '%')} vs a normal day)`, chg >= 0 ? 'good' : 'bad')}
+      ${kpi(fmt(sum(S, 'order')), `units to order tonight · ${fmt(sum(S, 'on_hand'))} on hand now`)}
+      ${kpi(fmt(risky), 'batches likely to be left over')}
+      ${kpi(f.store ? `${fmt(moveOut)} out · ${fmt(moveIn)} in` : fmt(moveOut), 'units moved between stores tonight')}</div>
+    <div class="card" style="margin-top:14px"><b>Next 7 days · ${filterLabel(f)} (units per day)</b>${svgLines(lines,
+      {h: 240, shade: p.days.map((d, i) => i === K), xlabels: p.days.map(d => d.slice(5))})}
+      <p class="muted">${single ? 'Band = P10 to P90 for this store and item.' : 'Likely demand only: adding up each series’ low and high would not give the range of a total. Pick one store and one item to see the band.'}</p></div>`;
+  // table: one row per item, or per store when one item is picked across all stores
+  const byStore = !f.store && f.item && !f.item.startsWith('cat:');
+  const groups = {};
+  S.forEach(x => { const g = byStore ? x.store : x.item; (groups[g] = groups[g] || []).push(x); });
+  const rowsOne = Object.values(groups).every(g => g.length === 1);
+  const rows = Object.entries(groups).map(([g, xs]) => ({name: g, normal: sum(xs, 'normal', K), p50: sum(xs, 'p50', K), p10: sum(xs, 'p10', K), p90: sum(xs, 'p90', K),
+    order: sum(xs, 'order'), on_hand: sum(xs, 'on_hand'), shelf: xs[0].shelf})).map(r => ({...r, chg: r.normal ? Math.round(1000 * (r.p50 / r.normal - 1)) / 10 : 0}))
+    .sort((a, b) => b.chg - a.chg);
+  h += `<h2>${byStore ? 'By store' : 'By item'}, ${p.target}</h2><div class="scroll"><table><tr><th>${byStore ? 'Store' : 'Item'}</th><th>Normal day</th><th>Expected${rowsOne ? ' (low–high)' : ''}</th><th>Change</th><th>Order tonight</th><th>On hand now</th>${byStore ? '' : '<th>Shelf life</th>'}</tr>${
+    rows.map(r => `<tr><td>${r.name}</td><td>${fmt(Math.round(r.normal))}</td><td><b>${fmt(Math.round(r.p50))}</b>${rowsOne ? ` <span class="muted">(${fmt(Math.round(r.p10))}–${fmt(Math.round(r.p90))})</span>` : ''}</td><td class="${r.chg > 3 ? 'up' : r.chg < -3 ? 'down' : ''}">${signed(r.chg, '%')}</td><td><b>${fmt(r.order)}</b></td><td>${fmt(r.on_hand)}</td>${byStore ? '' : `<td>${r.shelf} d</td>`}</tr>`).join('')}</table></div>`;
+  h += acts.length ? `<h2>Tonight's actions on risky batches</h2><table><tr><th>Action</th><th>Item</th><th>Store</th><th>Units</th><th>Chance left over</th><th>Sell-by</th><th>Value</th></tr>${
+      acts.slice(0, 25).map(a => `<tr><td><span class="pill ${a.action}">${a.action}</span></td><td>${a.item}</td><td>${a.store}${a.to_store ? ' → ' + a.to_store : ''}</td><td>${fmt(a.units)}</td><td>${Math.round(100 * a.p_leftover)}%</td><td>${a.sellby}</td><td>${rs(a.value_rs)}</td></tr>`).join('')}</table>`
+    : `<p class="muted">No transfers or markdowns tonight for ${filterLabel(f)}.</p>`;
   $('lv-out').innerHTML = h;
 }
 

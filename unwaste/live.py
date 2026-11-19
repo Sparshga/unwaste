@@ -263,8 +263,13 @@ def predict(inputs: dict) -> dict:
                 "order_units": int(orders.sum()), "habit_units": int(habit.sum()), "risky_batches": risky,
                 "transfers": sum(a["units"] for a in acts if a["action"] == "transfer"),
                 "markdowns": sum(1 for a in acts if a["action"] == "markdown")},
-        "items": json.loads(items.round(1).to_json(orient="records")), "actions": acts[:15],
-        "batches": batches[:250], "n_batches": len(batches), "stores": sorted(meta["store_id"].unique()),
+        "items": json.loads(items.round(1).to_json(orient="records")), "actions": acts,
+        "batches": batches[:400], "n_batches": len(batches), "stores": sorted(meta["store_id"].unique()),
+        "series": [{"store": meta["store_id"].iloc[s], "item": meta["product_id"].iloc[s], "cat": meta["cat"].iloc[s],
+                    "shelf": int(meta["shelf_life"].iloc[s]), "order": int(orders[s]), "on_hand": int(on_hand[s]),
+                    "normal": np.round(F0[0.5][s], 1).tolist(), "p10": np.round(F[0.1][s], 1).tolist(),
+                    "p50": np.round(F[0.5][s], 1).tolist(), "p90": np.round(F[0.9][s], 1).tolist()}
+                   for s in range(len(meta))],
         "service_floor": cfg.service_floor, "mc_paths": cfg.mc_paths,
         "stock_source": "sample: a store that orders every 3 days by habit (simulated, last 3 weeks)" if sample
                         else "Unwaste's own daily-ordering stock from the replay",
