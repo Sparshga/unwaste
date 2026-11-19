@@ -46,6 +46,7 @@ class Config:
     mc_paths: int = 300                          # Monte Carlo replays per decision
     n_estimators: int = 200                      # boosting rounds per model
     use_weather: bool = True                     # rain, temperature, humidity, wind as forecast inputs
+    use_festivals: bool = True                   # festival calendar as forecast input (when the data has it)
     relative_target: bool = False                # predict demand relative to the recent 14-day level
     seed: int = 7
 

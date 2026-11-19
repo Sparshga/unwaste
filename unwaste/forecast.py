@@ -29,11 +29,12 @@ def to_matrix(daily: pd.DataFrame, value: str) -> tuple[np.ndarray, pd.DatetimeI
 
 
 WEATHER = ["rain", "temp", "humidity", "wind"]
+FEST = ["days_to_fest", "fest_weight"]   # from the public festival calendar, known weeks ahead
 
 
 def exo_matrices(daily: pd.DataFrame) -> dict:
     out = {}
-    for c in ["discount", "holiday", "activity"] + [w for w in WEATHER if w in daily.columns]:
+    for c in ["discount", "holiday", "activity"] + [w for w in WEATHER + FEST if w in daily.columns]:
         out[c] = daily.pivot_table(index="series_id", columns="dt", values=c, aggfunc="mean") \
             .sort_index().sort_index(axis=1).fillna(0).to_numpy()
     return out
@@ -68,7 +69,7 @@ def _build_rows(Y, exo, dates, origins, H, series_codes):
                    "same_dow": sd,
                    "discount": exo["discount"][:, tt], "holiday": exo["holiday"][:, tt],
                    "activity": exo["activity"][:, tt],
-                   **{w: exo[w][:, tt] for w in WEATHER if w in exo},
+                   **{w: exo[w][:, tt] for w in WEATHER + FEST if w in exo},
                    "store": series_codes[0], "product": series_codes[1],
                    "series": np.arange(S), "origin": np.full(S, o),
                    "target": Y[:, t] if t < T else np.full(S, np.nan)}
@@ -108,6 +109,8 @@ def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "
             exo_test[k][:, train_end + 1:] = np.asarray(vec)[None, train_end + 1:]
     test = _build_rows(Y, exo_test, dates, test_origins, H, codes)
     feats = FEATS if (cfg.use_weather and all(w in train.columns for w in WEATHER)) else BASE_FEATS
+    if cfg.use_festivals and all(f in train.columns for f in FEST):
+        feats = feats + FEST
     if cfg.relative_target:
         # predict demand RELATIVE to the item's recent level (last 14 days), then scale back.
         # Trees can't extrapolate, so this lets forecasts follow sudden level shifts

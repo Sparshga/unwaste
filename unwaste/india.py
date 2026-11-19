@@ -33,6 +33,7 @@ from .data import build_panel
 from .forecast import exo_matrices, WEATHER, fit_forecast, to_matrix
 from .impute import correct_demand
 from .replay import POLICIES, run_policy
+from .twin import build_twin, train_and_test
 
 INDIA_DIR = Path("data/raw/india")
 PRICE_ELASTICITY = -0.4          # +10% price -> about -4% demand (stated assumption)
@@ -365,6 +366,9 @@ def run(cfg: Config, india_dir: Path = INDIA_DIR) -> dict:
     res["indian_weather"] = indian_weather_whatif(Y, Y_raw, panel.daily, meta, dates, F_w,
                                                   load_open_meteo(Path(wx_files[0])), cfg)
     res["agmarknet"] = agmarknet_shock(Y, Y_raw, panel.daily, meta, agm, cfg, cfg.test_days)
+    # 4. Indian twin: same real stores, Delhi weather + Indian festival calendar; train and test on it
+    wx_al = align_weather(load_open_meteo(Path(wx_files[0])), pd.DatetimeIndex(dates))
+    res["twin"] = train_and_test(build_twin(Y, Y_raw, panel.daily, pd.DatetimeIndex(dates), wx_al, cfg), meta, cfg)
     if wx_src == "generated":
         res["indian_weather"]["place"] = "Delhi-NCR (generated stand-in)"
     if agm_src == "generated":

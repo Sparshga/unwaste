@@ -194,8 +194,35 @@ function renderIndia(ind) {
       <div class="card" style="margin-top:12px"><b>${ag.commodity} price, ₹/quintal (weekly)</b>${svgLines([{name: ag.commodity, data: s.price, color: '#D64545'}],
         {xlabels: s.weeks.map((d, i) => i % 13 === 0 ? d.slice(0, 7) : '')})}</div>`;
   }
+  const tw = ind.twin;
+  if (tw) {
+    const r = tw.replay, w = tw.wape;
+    h += `<h2>4 · Indian twin: train and test on Indian conditions</h2>
+      <p class="muted">Same real stores, moved onto Delhi weather and the 2024 Indian festival calendar.
+      Trained on ${tw.train_days} days (${tw.train_festivals.join(', ')}; ${tw.hot_days_train} days ≥35°C), tested on the next ${tw.test_days} days (${tw.test_festivals.join(', ') || 'no festival'}; ${tw.hot_days_test} days ≥35°C).</p>
+      <div class="row">${kpi(w.fest_a + '% → ' + w.fest_b + '%', 'forecast error around festivals: without → with festival calendar', w.fest_b < w.fest_a)}
+        ${kpi(r.baseline.waste_pct_of_received + '% → ' + r.unwaste_b.waste_pct_of_received + '%', 'waste: today’s ordering → Unwaste', true)}
+        ${kpi(r.baseline.service_level_pct + '% → ' + r.unwaste_b.service_level_pct + '%', 'service level', true)}</div>
+      <h2>5 · Event radar: what’s coming, and correct it</h2>
+      <p class="muted">The festival calendar and the weather forecast are known in advance. Unwaste shows the expected surge; the manager can correct it before ordering.</p>
+      <table><tr><th>Date</th><th>Event</th><th>Unwaste expects</th><th>Manager’s correction</th><th>Extra units to stock</th><th>What actually happened</th></tr>
+      ${tw.radar.map((e, i) => e.weather
+        ? `<tr><td>${e.date}</td><td>${e.event}</td><td colspan="4" class="muted">weather already in the forecast</td></tr>`
+        : `<tr><td>${e.date}</td><td>${e.event}${e.days_before ? ` <span class="muted">(${e.days_before} day${e.days_before > 1 ? 's' : ''} before)</span>` : ' <b>(today)</b>'}</td>
+           <td>${signed(e.uplift_pct, '%')}</td>
+           <td><input type="number" step="1" value="${e.uplift_pct}" style="width:70px" oninput="radarFix(${i}, this.value)"> %</td>
+           <td id="rx${i}">${fmt(Math.round(e.base_units * e.uplift_pct / 100))}</td>
+           <td>${signed(Math.round(1000 * (e.actual_units / e.base_units - 1)) / 10, '%')}</td></tr>`).join('')}</table>
+      <p class="muted">The calendar catches only part of the festival surge. That gap is why the manager can correct it; each correction is saved as a labelled example for retraining.</p>`;
+    window._radar = tw.radar;
+  }
   h += `<p class="muted">Store demand: FreshRetailNet-50K (real). Weather: ${src.weather === 'real' ? 'Open-Meteo, real' : 'generated'}. Mandi prices: ${src.mandi === 'real' ? 'Agmarknet, real' : 'generated in Agmarknet format'}.</p>`;
   $('india').innerHTML = h;
+}
+
+function radarFix(i, v) {
+  const e = window._radar[i], el = document.getElementById('rx' + i);
+  if (el) el.textContent = fmt(Math.round(e.base_units * (parseFloat(v) || 0) / 100));
 }
 
 async function load(name) {
