@@ -24,7 +24,8 @@ import pandas as pd
 from .decide import baseline_order, newsvendor_order
 from .forecast import WEATHER, _build_rows
 from .india_data import FEST_TYPES, FESTIVALS
-from .replay import Ledger, _nightly_actions
+from .replay import POLICIES, Ledger, _nightly_actions, run_policy
+from .risk import batch_risk
 
 STATE = Path("models/live_state.pkl")
 H = 7
@@ -41,6 +42,16 @@ def state() -> dict:
     if not STATE.exists():
         raise FileNotFoundError("models/live_state.pkl not found: run python -m unwaste.india_pipeline")
     return load_state(STATE.stat().st_mtime)
+
+
+@lru_cache(maxsize=1)
+def _sample_stock(mtime: float = 0.0) -> list:
+    """Sample starting stock: a store that orders every 3 days by habit (recent sales + 15%),
+    replayed over the last 3 weeks of history. This is the stock Unwaste inspects tonight."""
+    st = state()
+    cfg = replace(st["cfg"], review_period_days=3, test_days=21)
+    led = run_policy(POLICIES["baseline"], np.round(st["Y_tail"]).astype(int), st["S_tail"], None, st["meta"], cfg)
+    return led.final_stock
 
 
 def _target_dates(st) -> pd.DatetimeIndex:
@@ -173,12 +184,29 @@ def predict(inputs: dict) -> dict:
     F0 = _forecast(st, clim, none_cal, st["price_idx"], np.zeros_like(disc))
 
     # tonight's plan from tonight's stock
-    stock = copy.deepcopy(st["stock"])
+    sample = inputs.get("stock", "sample") == "sample"
+    stock = copy.deepcopy(_sample_stock(STATE.stat().st_mtime) if sample else st["stock"])
     T = st["Y_tail"].shape[1]
     t = T - 1
     Ffull = {q: np.zeros((len(meta), T, H)) for q in F}
     for q in F:
         Ffull[q][:, t, :] = F[q]
+    # every batch on hand tonight: chance it is still there at its sell-by line (before any action)
+    rng_r = np.random.default_rng(cfg.seed + 1)
+    d0 = st["dates_tail"][0]
+    day = lambda i: str((d0 + pd.Timedelta(days=int(i))).date())
+    batches = []
+    for s in range(len(meta)):
+        bs = [b for b in stock[s] if b.qty > 0]
+        if not bs:
+            continue
+        res = batch_risk(bs, F[0.1][s], F[0.5][s], F[0.9][s], t + 1, cfg.mc_paths, rng_r)
+        for b, r in zip(bs, res["batches"]):
+            batches.append({"series": s, "uid": b.uid, "store": meta["store_id"].iloc[s], "item": meta["product_id"].iloc[s],
+                            "qty": int(b.qty), "arrived": day(min(b.arrival, t)), "sellby": day(b.sellby),
+                            "days_left": int(b.sellby - t), "p_leftover": round(r["p_leftover"], 2),
+                            "exp_leftover": round(r["exp_leftover"], 1), "hist": r["hist"], "price": float(meta["price"].iloc[s]),
+                            "demand_next": round(float(F[0.5][s, 0]), 1), "action": "ok"})
     led = Ledger()
     by_product = {}
     for s, p in enumerate(meta["product_id"].to_numpy()):
@@ -212,6 +240,18 @@ def predict(inputs: dict) -> dict:
                      "units": a["units"], "p_leftover": a["p_leftover"], "value_rs": a["value_rs"],
                      "sellby": str((st["dates_tail"][0] + pd.Timedelta(days=int(a["sellby"]))).date())})
     acts.sort(key=lambda a: -a["value_rs"])
+    by_uid = {(a["series"], a["batch"]): a for a in led.actions}
+    for b in batches:
+        a = by_uid.get((b["series"], b["uid"]))
+        if a:
+            b.update({"action": a["action"], "units": a["units"], "to_store": a["to_store"], "value_rs": a["value_rs"]})
+        elif b["p_leftover"] >= 0.3 and b["days_left"] <= 1:
+            b["action"] = "clearance"          # sells its last day tomorrow: too late to move, 30% off on the day
+        elif b["p_leftover"] >= 0.3:
+            b["action"] = "watch"
+        b["order_tonight"] = int(orders[b["series"]])
+    rank = {"transfer": 0, "markdown": 1, "hold": 2, "clearance": 3, "watch": 4, "ok": 5}
+    batches.sort(key=lambda b: (rank[b["action"]], -b["p_leftover"], b["days_left"]))
     risky = sum(1 for a in led.actions)
     tot = lambda F_: [round(float(F_[:, h].sum())) for h in range(H)]
     return {
@@ -224,4 +264,8 @@ def predict(inputs: dict) -> dict:
                 "transfers": sum(a["units"] for a in acts if a["action"] == "transfer"),
                 "markdowns": sum(1 for a in acts if a["action"] == "markdown")},
         "items": json.loads(items.round(1).to_json(orient="records")), "actions": acts[:15],
+        "batches": batches[:250], "n_batches": len(batches), "stores": sorted(meta["store_id"].unique()),
+        "service_floor": cfg.service_floor, "mc_paths": cfg.mc_paths,
+        "stock_source": "sample: a store that orders every 3 days by habit (simulated, last 3 weeks)" if sample
+                        else "Unwaste's own daily-ordering stock from the replay",
     }

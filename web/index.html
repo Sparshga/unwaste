@@ -67,6 +67,7 @@
 </header>
 <nav>
   <button data-tab="live" class="on">Predict tomorrow</button>
+  <button data-tab="iact">India store actions</button>
   <button data-tab="imain">India results</button>
   <span class="navsep">FreshRetailNet validation:</span>
   <button data-tab="actions">Store actions</button>
@@ -93,6 +94,16 @@
       <p class="muted" id="lv-src" style="margin:10px 0 0"></p>
     </div>
     <div id="lv-out"><p class="muted">Start the server with <code>uvicorn unwaste.api:app --port 8000</code> and open this page from it.</p></div>
+  </section>
+
+  <!-- ======================= INDIA STORE ACTIONS ======================= -->
+  <section id="tab-iact" class="hide">
+    <div class="controls">
+      <label class="muted">Store</label><select id="ia-store"><option value="">All stores</option></select>
+      <label class="muted">Show</label><select id="ia-show"><option value="risk">Act or watch</option><option value="all">Every batch on hand</option></select>
+      <span class="muted" id="ia-count"></span>
+    </div>
+    <div class="grid2"><div id="ia-list"><p class="muted">Run a prediction on the Predict tomorrow tab first.</p></div><div class="detail" id="ia-detail"><p class="muted">Click a batch to see why.</p></div></div>
   </section>
 
   <!-- ======================= INDIA RESULTS ======================= -->
@@ -150,7 +161,7 @@ const $ = id => document.getElementById(id);
 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
-  ['live','imain','actions','score','truth','proof','india'].forEach(t => $('tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
+  ['live','iact','imain','actions','score','truth','proof','india'].forEach(t => $('tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
 });
 
 function svgBars(values, labels, opts = {}) {
@@ -297,6 +308,8 @@ function renderIMain(m) {
       m.dial.map(x => `<tr><td>${Math.round(100 * x.service_floor)}th percentile</td><td>${x.waste_pct}%</td><td>${x.service_pct}%</td><td>${rs(x.net_after_lost_rs)}</td></tr>`).join('')}</table>` : ''}
     <p class="muted">Forecast inputs: ${m.features.join(', ')}. Engine: ${m.backends.forecast} · ${m.backends.optimiser}.</p>`;
   $('imain').innerHTML = h;
+  setTimeout(() => { $('src').textContent = `Data: Unwaste-India (${ds.stores} Delhi-NCR stores) · validation: FreshRetailNet-50K`; $('src').classList.remove('warn');
+    $('eng').textContent = `${m.backends.forecast} · ${m.backends.optimiser}`; $('win').textContent = `${ds.items} items · trained ${ds.start} → ${ds.train_end} · tested to ${ds.end}`; }, 300);
 }
 
 // ======================= PREDICT TOMORROW =======================
@@ -304,7 +317,10 @@ let LV = null;
 async function liveInit() {
   try { const r = await fetch('/api/live/context'); if (!r.ok) throw new Error(await r.text()); LV = await r.json(); }
   catch (e) { $('lv-out').innerHTML = `<p class="muted">Live model not available: run <code>python -m unwaste.india_pipeline</code>, then start <code>uvicorn unwaste.api:app --port 8000</code> and open this page from it.</p>`; return; }
-  $('lv-date').innerHTML = LV.days.map((d, i) => `<option value="${d}">${d}${i === 0 ? ' (tomorrow)' : ''}</option>`).join('');
+  const iso = x => new Date(x.getTime() - x.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+  const now = new Date(), today = iso(now), tmrw = iso(new Date(now.getTime() + 864e5));
+  $('lv-date').innerHTML = LV.days.map(d => `<option value="${d}">${d}${d === today ? ' (today)' : d === tmrw ? ' (tomorrow)' : ''}</option>`).join('');
+  if (LV.days.includes(tmrw)) $('lv-date').value = tmrw;
   $('lv-pcat').innerHTML = '<option value="">none</option>' + LV.categories.map(c => `<option>${c}</option>`).join('');
   const prefill = () => {
     const i = LV.days.indexOf($('lv-date').value), w = LV.weather[i], c = LV.calendar[i];
@@ -327,7 +343,39 @@ async function liveRun() {
   $('lv-out').innerHTML = '<p class="muted">Predicting…</p>';
   const r = await fetch('/api/live/predict', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   if (!r.ok) { $('lv-out').innerHTML = `<p class="muted">Error: ${await r.text()}</p>`; return; }
-  renderLive(await r.json());
+  const p = await r.json();
+  renderLive(p); renderIAct(p);
+}
+function renderIAct(p) {
+  const st = $('ia-store'), keep = st.value;
+  st.innerHTML = '<option value="">All stores</option>' + p.stores.map(s => `<option>${s}</option>`).join(''); st.value = keep;
+  const verb = b => b.action === 'transfer' ? `Transfer ${b.units} → ${b.to_store}` : b.action === 'markdown' ? `Mark down 15% now` :
+    b.action === 'hold' ? 'Hold: no better option' : b.action === 'clearance' ? 'Last-day clearance' : b.action === 'watch' ? 'Watch' : 'OK';
+  const pill = b => ({transfer: 'transfer', markdown: 'markdown', hold: 'hold', clearance: 'markdown', watch: 'hold', ok: 'hold'})[b.action];
+  const draw = () => {
+    const rows = p.batches.filter(b => (!st.value || b.store === st.value) && ($('ia-show').value === 'all' || b.action !== 'ok'));
+    $('ia-count').textContent = `${rows.length} of ${p.n_batches} batches on hand tonight · plan for ${p.target} · ${rows.filter(b => ['transfer', 'markdown'].includes(b.action)).length} actions · stock: ${p.stock_source}`;
+    $('ia-list').innerHTML = rows.map((b, i) => `<div class="act" data-i="${p.batches.indexOf(b)}">
+        <div><b>${b.store}</b> · ${b.item}<div class="muted">Batch of ${b.qty} · arrived ${b.arrived} · sell-by ${b.sellby} (${b.days_left} day${b.days_left === 1 ? '' : 's'})</div></div>
+        <div>${Math.round(100 * b.p_leftover)}% risk<div class="bar"><i style="width:${Math.round(100 * b.p_leftover)}%"></i></div><div class="muted">~${b.exp_leftover} left if we wait</div></div>
+        <div><span class="pill ${pill(b)}">${verb(b)}</span></div>
+        <div class="money">${b.value_rs > 0 ? '+' + rs(b.value_rs) : '—'}</div></div>`).join('') || '<p class="muted">No batch at risk for this store. Try "Every batch on hand", or a scenario with lower demand (e.g. a price rise).</p>';
+    document.querySelectorAll('#ia-list .act').forEach(el => el.onclick = () => {
+      document.querySelectorAll('#ia-list .act').forEach(x => x.classList.remove('sel')); el.classList.add('sel');
+      const b = p.batches[+el.dataset.i];
+      $('ia-detail').innerHTML = `<h3 style="margin:0 0 4px">${b.store} · ${b.item}</h3>
+        <p class="muted">${b.qty} units · ₹${b.price} each · sell-by ${b.sellby} · tomorrow's expected demand ${b.demand_next} · tonight's order ${b.order_tonight}</p>
+        <p><b>${Math.round(100 * b.p_leftover)}%</b> of ${p.mc_paths} simulated weeks leave units of this batch unsold on its sell-by line (sold oldest-first).</p>
+        ${histogram(b.hist, b.qty)}<p class="muted">Each bar = how many simulations ended with that many units left.</p>
+        <p><span class="pill ${pill(b)}">${verb(b)}</span></p>
+        <p>${b.action === 'transfer' ? `Moving ${b.units} units earns <b>${rs(b.value_rs)}</b> more than letting them expire; the receiving store's forecast has room for them.` :
+          b.action === 'markdown' ? `Marking down now is expected to earn <b>${rs(b.value_rs)}</b> more than waiting.` :
+          b.action === 'hold' ? 'At risk, but no store has spare demand and a markdown would lose money.' :
+          b.action === 'clearance' ? 'Its last selling day is tomorrow: too late to move it to another store, so it goes 30% off on the day. Unwaste orders less next time to avoid this.' :
+          b.action === 'watch' ? 'Some risk, below the 60% line where Unwaste acts. Re-checked tomorrow night.' : 'Expected to sell before its sell-by line.'}</p>`;
+    });
+  };
+  st.onchange = draw; $('ia-show').onchange = draw; draw();
 }
 function renderLive(p) {
   const k = p.kpi, w = p.weather_used, fe = p.festival_used, kpi = (v, l, c) => `<div class="card"><div class="kpi ${c || ''}">${v}</div><div class="lbl">${l}</div></div>`;
@@ -355,6 +403,8 @@ async function load(name) {
 }
 
 (async () => {
+  liveInit();
+  try { renderIMain(await load('india_main')); } catch (e) { /* not run yet */ }
   let score, acts, truth;
   try { [score, acts, truth] = await Promise.all([load('scoreboard'), load('actions'), load('demand_truth')]); }
   catch (e) { $('src').textContent = 'No data yet: run  python -m unwaste.pipeline'; $('src').classList.add('warn'); return; }
@@ -435,7 +485,6 @@ async function load(name) {
   }
   // ---------------- India & weather (Phase 3, optional) ----------------
   try { renderIndia(await load('india')); } catch (e) { /* not run yet */ }
-  try { renderIMain(await load('india_main')); } catch (e) { /* not run yet */ }
 
   // ---------------- proof tests (Phase 2, optional) ----------------
   let proof = null;
