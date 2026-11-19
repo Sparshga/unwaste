@@ -110,9 +110,32 @@ def build_twin(Y, S, daily, dates, wx: pd.DataFrame, cfg, seed: int = 21) -> dic
     for c in ["days_to_fest", "fest_weight"]:
         d[c] = d["dt"].map(cal[c]).astype(float)
     d["holiday"] = d["dt"].map(cal["is_fest"]).astype(float)       # Indian festival days replace holidays
+    save_twin(Y, Y_tw, d, cal, dates)
     return {"Y": Y_tw, "S": S_tw, "daily": d, "cal": cal, "sens": sens,
             "weather_effect": {"rain_mm": np.round(rain_c[0], 1).tolist(), "rain_rel": np.round(rain_c[1], 3).tolist(),
                                "temp_c": np.round(temp_c[0], 1).tolist(), "temp_rel": np.round(temp_c[1], 3).tolist()}}
+
+
+TWIN_CSV = "data/raw/india_twin/twin_daily.csv"
+
+
+def save_twin(Y, Y_tw, d, cal, dates, path: str = TWIN_CSV) -> None:
+    """One row per store-item-day: original demand next to the Indian-twin demand and its inputs."""
+    from pathlib import Path
+    meta = d.groupby("series_id")[["store_id", "product_id"]].first().sort_index()
+    S_n, T = Y.shape
+    out = pd.DataFrame({
+        "date": np.tile(dates, S_n), "store_id": np.repeat(meta["store_id"].to_numpy(), T),
+        "product_id": np.repeat(meta["product_id"].to_numpy(), T),
+        "demand_original": Y.ravel().round(2), "demand_india": Y_tw.ravel().round(2)})
+    days = d.groupby("dt")[["rain", "temp", "humidity", "wind"]].first().reindex(dates)
+    for c in days.columns:
+        out[c] = np.tile(days[c].to_numpy().round(1), S_n)
+    for c in ["fest_name", "days_to_fest", "fest_weight", "is_fest"]:
+        out[c] = np.tile(cal[c].to_numpy(), S_n)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(path, index=False)
+    print(f"[twin] saved the Indian twin dataset: {path} ({len(out):,} rows)")
 
 
 def _wape(P50, Y, te, keep_day=None):
