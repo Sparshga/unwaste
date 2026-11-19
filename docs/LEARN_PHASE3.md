@@ -28,6 +28,12 @@ uvicorn unwaste.api:app --port 8000         # tab "India & weather"
 - **What we found on stand-in data:** when demand collapses **city-wide**, Unwaste keeps service higher but wastes more, because there's no store with spare demand to transfer to and the forecast takes a few days to catch up.
 - **Say it plainly, then the fix:** "Our next step is to feed the mandi price itself into the forecast, so a price spike is anticipated, not discovered a week late."
 
+## Real or generated Indian data
+- If `data/raw/india/weather_*.json` and `agmarknet_*.csv` exist, they are used and the tab shows a green **real data** badge.
+- If not, `india.py` generates stand-ins (`generate_weather`, `generate_mandi`) into `data/raw/india_generated/` and the tab shows an orange **generated stand-in** badge.
+- Generated weather follows Delhi's monthly climate (hot May-June, monsoon from late June). Generated mandi prices follow the known spikes (tomato Jul-Aug 2023, onion Oct-Nov 2023).
+- **Say:** "Store demand is real (FreshRetailNet). The Indian layer is real where we could download it, and a generated stand-in shaped on public patterns where we couldn't. The dashboard labels which is which."
+
 ## Other changes on this branch
 - `config.relative_target` (off by default): predicts demand relative to the recent 14-day level, which helps forecasts follow sudden level shifts. Try `relative_target=True` in `config.py` and compare.
 - Coaching notes ("say this to a judge", "Owner") removed from all code files.

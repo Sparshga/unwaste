@@ -232,6 +232,59 @@ def agmarknet_shock(Y, Y_raw, daily, meta, agm: dict, cfg, test_days: int) -> di
     return res
 
 
+# ----------------------------------------------------------------------------- generated Indian files
+# Used only when the real files are missing. Shapes follow public patterns:
+# Delhi climate by month (hot May-June, monsoon from about 28 June) and well-known
+# mandi spikes (tomato Jul-Aug 2023, onion Oct-Nov 2023). Labelled "generated" everywhere.
+GEN_DIR = Path("data/raw/india_generated")
+_DELHI_TEMP = {1: 14, 2: 17, 3: 23, 4: 30, 5: 34, 6: 34, 7: 31, 8: 30, 9: 29, 10: 26, 11: 20, 12: 15}
+_DELHI_RAIN_MM_MONTH = {1: 19, 2: 20, 3: 15, 4: 10, 5: 25, 6: 70, 7: 210, 8: 230, 9: 120, 10: 15, 11: 5, 12: 8}
+_MANDI = {  # base ₹/quintal, seasonal swing, spikes (start, end, multiplier)
+    "tomato": (1500, 0.25, [("2023-07-01", "2023-08-15", 3.5), ("2024-10-01", "2024-10-31", 2.0)]),
+    "onion": (1800, 0.15, [("2023-10-15", "2023-11-30", 2.2), ("2024-09-01", "2024-10-15", 1.8)]),
+    "potato": (1200, 0.10, [("2024-06-15", "2024-08-15", 1.5)]),
+}
+
+
+def generate_weather(folder: Path, year_dates: pd.DatetimeIndex, seed: int = 11) -> Path:
+    rng = np.random.default_rng(seed)
+    days = pd.date_range(f"{year_dates.min().year}-01-01", f"{year_dates.max().year}-12-31", freq="D")
+    m = days.month.to_numpy()
+    temp = np.array([_DELHI_TEMP[x] for x in m], float) + rng.normal(0, 1.8, len(days))
+    p_rain = np.where((m >= 7) & (m <= 8), 0.45, np.where(m == 6, 0.15, np.where(m == 9, 0.25, 0.06)))
+    monthly = np.array([_DELHI_RAIN_MM_MONTH[x] for x in m], float)
+    wet = rng.random(len(days)) < p_rain
+    rain = np.where(wet, rng.gamma(1.1, monthly / (30 * p_rain) / 1.1), 0.0)
+    temp -= np.where(rain > 10, 3.0, 0.0)
+    hum = np.clip(np.where((m >= 7) & (m <= 9), 75, np.where((m >= 4) & (m <= 6), 35, 55)) + rain * 0.5
+                  + rng.normal(0, 6, len(days)), 10, 100)
+    js = {"generated": True, "daily": {"time": [str(d.date()) for d in days],
+          "temperature_2m_mean": temp.round(1).tolist(), "precipitation_sum": rain.round(1).tolist(),
+          "relative_humidity_2m_mean": hum.round(0).tolist(),
+          "wind_speed_10m_max": rng.uniform(8, 20, len(days)).round(1).tolist()}}
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / "weather_generated.json"
+    out.write_text(json.dumps(js))
+    return out
+
+
+def generate_mandi(folder: Path, seed: int = 12) -> None:
+    rng = np.random.default_rng(seed)
+    days = pd.date_range("2023-01-01", "2024-12-31", freq="D")
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, (base, swing, spikes) in _MANDI.items():
+        price = base * (1 + swing * np.sin(2 * np.pi * (days.dayofyear.to_numpy() - 60) / 365))
+        mult = np.ones(len(days))
+        for a, b, k in spikes:  # smooth ramp up and down around each spike
+            mid, half = pd.Timestamp(a) + (pd.Timestamp(b) - pd.Timestamp(a)) / 2, (pd.Timestamp(b) - pd.Timestamp(a)) / 2
+            dist = np.abs((days - mid).days.to_numpy()) / max(half.days, 1)
+            mult *= 1 + (k - 1) * np.clip(1.3 - dist, 0, 1)
+        price = price * mult * np.exp(rng.normal(0, 0.06, len(days)))
+        arrivals = 1000 / mult * np.exp(rng.normal(0, 0.15, len(days)))
+        pd.DataFrame({"Arrival_Date": days.strftime("%d/%m/%Y"), "Modal_Price": price.round(0),
+                      "Arrivals_Tonnes": arrivals.round(0)}).to_csv(folder / f"agmarknet_{name}.csv", index=False)
+
+
 # ----------------------------------------------------------------------------- synthetic Indian files
 def _write_fake_india(folder: Path, dates: pd.DatetimeIndex) -> None:
     rng = np.random.default_rng(3)
@@ -267,16 +320,27 @@ def run(cfg: Config, india_dir: Path = INDIA_DIR) -> dict:
     res = {"source": panel.source}
     res["weather_in_forecast"], F_w = weather_in_forecast(Y, panel.daily, cfg)
 
+    # Indian inputs: real files if present, otherwise generated stand-ins (clearly labelled)
     wx_files = sorted(glob.glob(str(india_dir / "weather_*.json")))
-    res["indian_weather"] = (indian_weather_whatif(Y, Y_raw, panel.daily, meta, dates, F_w,
-                                                   load_open_meteo(Path(wx_files[0])), cfg)
-                             if wx_files else None)
+    wx_src = "real" if wx_files and not cfg.use_synthetic else "generated"
     if not wx_files:
-        print(f"[india] no weather file in {india_dir}: skipping the Indian weather what-if")
+        wx_files = [str(generate_weather(GEN_DIR, pd.DatetimeIndex(dates)))]
+        print(f"[india] no weather file in {india_dir}: using GENERATED Delhi-like weather")
     agm = load_agmarknet(india_dir)
-    res["agmarknet"] = agmarknet_shock(Y, Y_raw, panel.daily, meta, agm, cfg, cfg.test_days) if agm else None
+    agm_src = "real" if agm and not cfg.use_synthetic else "generated"
     if not agm:
-        print(f"[india] no agmarknet_*.csv in {india_dir}: skipping the mandi shock")
+        generate_mandi(GEN_DIR)
+        agm = load_agmarknet(GEN_DIR)
+        print(f"[india] no agmarknet_*.csv in {india_dir}: using GENERATED mandi prices")
+    res["inputs"] = {"weather": wx_src, "mandi": agm_src}
+
+    res["indian_weather"] = indian_weather_whatif(Y, Y_raw, panel.daily, meta, dates, F_w,
+                                                  load_open_meteo(Path(wx_files[0])), cfg)
+    res["agmarknet"] = agmarknet_shock(Y, Y_raw, panel.daily, meta, agm, cfg, cfg.test_days)
+    if wx_src == "generated":
+        res["indian_weather"]["place"] = "Delhi-NCR (generated stand-in)"
+    if agm_src == "generated":
+        res["agmarknet"]["market"] = "Delhi mandi (generated stand-in)"
     res["runtime_s"] = round(time.time() - t0)
     out = Path(cfg.out_dir) / "india.json"
     out.parent.mkdir(parents=True, exist_ok=True)
