@@ -1,13 +1,12 @@
 """
 Step 10 · Serve the screen and the JSON outputs.
 
-WHAT THIS FILE DOES (say this to a judge):
+
   "A small FastAPI app. It serves the manager screen and exposes the nightly outputs
    as JSON endpoints: /api/scoreboard, /api/actions, /api/demand-truth. In production
    the store-ops app would call these same endpoints."
 
 Run:  uvicorn unwaste.api:app --port 8000     then open http://localhost:8000
-Owner: Aniz.
 """
 import json
 from pathlib import Path
