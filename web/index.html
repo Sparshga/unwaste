@@ -56,6 +56,15 @@
   .go{ background:var(--blue); color:#fff; border:0; border-radius:8px; padding:10px 18px; font:inherit; font-weight:700; cursor:pointer }
   .scroll{ max-height:420px; overflow:auto; border-radius:10px }
   td.up{ color:#1C7C3A; font-weight:700 } td.down{ color:var(--red); font-weight:700 }
+  .hero{ display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px; margin-top:6px }
+  .hero .card{ border-left:5px solid var(--blue); background:linear-gradient(0deg,#FFFFFF,#F4F7FF) }
+  .hero .card.warn{ border-left-color:#D98A00 } .hero .card.good{ border-left-color:#1C7C3A }
+  .hero .kpi{ font-size:30px } .hero .sub{ font-size:13px; margin-top:6px } .hero .metric{ font-size:11px; color:var(--muted); margin-top:8px; border-top:1px dashed var(--line); padding-top:6px }
+  .search{ flex:1; min-width:220px; max-width:420px; padding:9px 12px 9px 34px; border:1px solid var(--line); border-radius:22px; font:inherit; background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235B6270' stroke-width='2'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M21 21l-4.3-4.3'/%3E%3C/svg%3E") no-repeat 12px center }
+  .risk{ display:inline-block; min-width:46px; text-align:center; padding:3px 8px; border-radius:12px; font-weight:700; font-size:12px; background:#EEF1F7; color:var(--muted) }
+  .risk.hi{ background:#FDE2E2; color:#B42318 } .risk.mid{ background:#FFF1D6; color:#9A5B00 }
+  .section-title{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap }
+  .vs{ color:var(--muted); font-size:12px }
 </style>
 </head>
 <body>
@@ -96,7 +105,8 @@
     <div class="controls" id="lv-filters" style="margin-top:14px">
       <label class="muted">Store</label><select id="lv-store"></select>
       <label class="muted">Item</label><select id="lv-item"></select>
-      <span class="muted">Filters change the view instantly; Predict again only when weather, festival or price changes.</span>
+      <input id="lv-q" class="search" placeholder="Search item or store…">
+      <label class="muted">Sort</label><select id="lv-sort"><option value="risk">Highest waste risk</option><option value="chg">Biggest change</option><option value="name">A–Z</option></select>
     </div>
     <div id="lv-out"><p class="muted">Start the server with <code>uvicorn unwaste.api:app --port 8000</code> and open this page from it.</p></div>
   </section>
@@ -105,6 +115,7 @@
   <section id="tab-iact" class="hide">
     <div class="controls">
       <span class="muted" id="ia-filter"></span>
+      <input id="ia-q" class="search" placeholder="Search item or store…">
       <label class="muted">Show</label><select id="ia-show"><option value="risk">Act or watch</option><option value="all">Every batch on hand</option></select>
       <span class="muted" id="ia-count"></span>
     </div>
@@ -180,32 +191,45 @@ function svgBars(values, labels, opts = {}) {
     s += `<text x="${x + bw / 2}" y="${y - 6}" text-anchor="middle" font-size="13" font-weight="700">${opts.fmt ? opts.fmt(v) : v}</text>`;
     s += `<text x="${x + bw / 2}" y="${H - 14}" text-anchor="middle" font-size="12" fill="#5B6270">${labels[i]}</text>`;
   });
-  return s + `<line x1="${pad}" x2="${W - pad}" y1="${H - 34}" y2="${H - 34}" stroke="#C9D2E6"/></svg>`;
+  s += `<line x1="${pad}" x2="${pad}" y1="20" y2="${H - 34}" stroke="#9AA3B5"/>`;
+  [0, 0.5, 1].forEach(f => { const v = max / 1.15 * f, y = H - 34 - (H - 60) * v / max; s += `<text x="${pad - 6}" y="${y + 4}" text-anchor="end" font-size="10" fill="#5B6270">${opts.fmt ? opts.fmt(+v.toFixed(1)) : axFmt(v)}</text><line x1="${pad}" x2="${pad + 4}" y1="${y}" y2="${y}" stroke="#9AA3B5"/>`; });
+  return s + `<line x1="${pad}" x2="${W - pad}" y1="${H - 34}" y2="${H - 34}" stroke="#9AA3B5"/></svg>`;
 }
 
+function niceTicks(max, n = 4) {
+  const raw = max / n, mag = Math.pow(10, Math.floor(Math.log10(raw || 1))), step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || raw;
+  const out = []; for (let v = 0; v <= max + 1e-9; v += step) out.push(+v.toFixed(6)); return out;
+}
+const axFmt = v => v >= 1e5 ? (v / 1e5).toFixed(v % 1e5 ? 1 : 0) + 'L' : v >= 1e3 ? (v / 1e3).toFixed(v % 1e3 ? 1 : 0) + 'k' : String(+v.toFixed(2));
 function svgLines(series, opts = {}) {
-  const W = opts.w || 760, H = opts.h || 240, pad = 40;
-  const n = series[0].data.length, max = Math.max(...series.flatMap(s => s.data), 1e-9) * 1.1;
-  const X = i => pad + i * (W - pad * 2) / Math.max(n - 1, 1), Y = v => H - 30 - (H - 60) * v / max;
+  const W = opts.w || 760, H = opts.h || 260, L = 58, R = 16, T = 30, B = opts.xtitle ? 48 : 34;
+  const n = series[0].data.length, ticks = niceTicks(Math.max(...series.flatMap(s => s.data), 1e-9) * 1.05), max = ticks.at(-1);
+  const X = i => L + i * (W - L - R) / Math.max(n - 1, 1), Y = v => H - B - (H - T - B) * v / max;
   let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img">`;
-  if (opts.shade) opts.shade.forEach((on, i) => { if (on) s += `<rect x="${X(i) - (W - pad * 2) / n / 2}" y="20" width="${(W - pad * 2) / n}" height="${H - 50}" fill="#FDE2E2"/>`; });
+  if (opts.shade) opts.shade.forEach((on, i) => { if (on) { const w = (W - L - R) / Math.max(n - 1, 1); s += `<rect x="${X(i) - w / 2}" y="${T}" width="${w}" height="${H - T - B}" fill="#FDE2E2"/>`; } });
+  ticks.forEach(v => { s += `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="#E7EAF2"/><text x="${L - 8}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="#5B6270">${axFmt(v)}</text>`; });
+  s += `<line x1="${L}" x2="${L}" y1="${T}" y2="${H - B}" stroke="#9AA3B5"/><line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" stroke="#9AA3B5"/>`;
+  if (opts.ytitle) s += `<text transform="translate(14 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle" font-size="11" fill="#5B6270">${opts.ytitle}</text>`;
+  if (opts.xtitle) s += `<text x="${(L + W - R) / 2}" y="${H - 6}" text-anchor="middle" font-size="11" fill="#5B6270">${opts.xtitle}</text>`;
   series.forEach(sr => {
     s += `<polyline fill="none" stroke="${sr.color}" stroke-width="${sr.width || 2.5}" ${sr.dash ? 'stroke-dasharray="6 5"' : ''} points="${sr.data.map((v, i) => X(i) + ',' + Y(v)).join(' ')}"/>`;
   });
-  if (opts.xlabels) opts.xlabels.forEach((l, i) => { if (l !== '') s += `<text x="${X(i)}" y="${H - 10}" text-anchor="middle" font-size="11" fill="#5B6270">${l}</text>`; });
-  let lx = pad;
-  series.forEach(sr => { s += `<rect x="${lx}" y="4" width="14" height="4" fill="${sr.color}"/><text x="${lx + 20}" y="10" font-size="12">${sr.name}</text>`; lx += 28 + sr.name.length * 7; });
+  if (opts.xlabels) opts.xlabels.forEach((l, i) => { if (l !== '') s += `<text x="${X(i)}" y="${H - B + 16}" text-anchor="middle" font-size="11" fill="#5B6270">${l}</text>`; });
+  let lx = L;
+  series.forEach(sr => { s += `<rect x="${lx}" y="8" width="14" height="4" fill="${sr.color}"/><text x="${lx + 20}" y="14" font-size="12">${sr.name}</text>`; lx += 28 + sr.name.length * 7; });
   return s + `</svg>`;
 }
 
 function histogram(h, qty) {
-  const W = 360, H = 150, n = h.length, max = Math.max(...h, 1), bw = (W - 20) / n;
+  const W = 360, H = 190, L = 40, B = 40, T = 10, n = h.length, ticks = niceTicks(Math.max(...h, 1)), max = ticks.at(-1), bw = (W - L - 8) / n;
+  const Y = v => H - B - (H - B - T) * v / max;
   let s = `<svg viewBox="0 0 ${W} ${H}" width="100%">`;
-  h.forEach((v, i) => {
-    const bh = (H - 40) * v / max, x = 10 + i * bw;
-    s += `<rect x="${x + 1}" y="${H - 26 - bh}" width="${bw - 2}" height="${bh}" fill="${i === 0 ? '#C9D2E6' : '#2B59F3'}"/>`;
-  });
-  s += `<text x="10" y="${H - 8}" font-size="11" fill="#5B6270">0 left</text><text x="${W - 10}" y="${H - 8}" font-size="11" fill="#5B6270" text-anchor="end">${qty} left</text>`;
+  ticks.forEach(v => { s += `<line x1="${L}" x2="${W - 8}" y1="${Y(v)}" y2="${Y(v)}" stroke="#E7EAF2"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="10" fill="#5B6270">${v}</text>`; });
+  h.forEach((v, i) => { const x = L + i * bw; s += `<rect x="${x + 1}" y="${Y(v)}" width="${bw - 2}" height="${H - B - Y(v)}" fill="${i === 0 ? '#C9D2E6' : '#2B59F3'}"/>`; });
+  s += `<line x1="${L}" x2="${W - 8}" y1="${H - B}" y2="${H - B}" stroke="#9AA3B5"/><line x1="${L}" x2="${L}" y1="${T}" y2="${H - B}" stroke="#9AA3B5"/>`;
+  s += `<text x="${L}" y="${H - B + 14}" font-size="10" fill="#5B6270">0</text><text x="${W - 8}" y="${H - B + 14}" font-size="10" fill="#5B6270" text-anchor="end">${qty}</text>`;
+  s += `<text x="${(L + W) / 2}" y="${H - 6}" text-anchor="middle" font-size="11" fill="#5B6270">units left at the sell-by line</text>`;
+  s += `<text transform="translate(11 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle" font-size="11" fill="#5B6270">simulations</text>`;
   return s + '</svg>';
 }
 
@@ -359,11 +383,13 @@ function renderIAct(p) {
     b.action === 'hold' ? 'Hold: no better option' : b.action === 'clearance' ? 'Last-day clearance' : b.action === 'watch' ? 'Watch' : 'OK';
   const pill = b => ({transfer: 'transfer', markdown: 'markdown', hold: 'hold', clearance: 'markdown', watch: 'hold', ok: 'hold'})[b.action];
   const draw = () => {
-    const rows = p.batches.filter(b => matchS({...b, cat: catOf(p, b.item)}, f) && ($('ia-show').value === 'all' || b.action !== 'ok'));
+    const q = $('ia-q').value.trim();
+    $('ia-detail').innerHTML = '<p class="muted">Click a batch to see why.</p>';
+    const rows = p.batches.filter(b => matchS({...b, cat: catOf(p, b.item)}, f) && hit(q, b.item, b.store) && ($('ia-show').value === 'all' || b.action !== 'ok'));
     $('ia-count').textContent = `${rows.length} of ${p.n_batches} batches on hand tonight · plan for ${p.target} · ${rows.filter(b => ['transfer', 'markdown'].includes(b.action)).length} actions · stock: ${p.stock_source}`;
     $('ia-list').innerHTML = rows.map((b, i) => `<div class="act" data-i="${p.batches.indexOf(b)}">
         <div><b>${b.store}</b> · ${b.item}<div class="muted">Batch of ${b.qty} · arrived ${b.arrived} · sell-by ${b.sellby} (${b.days_left} day${b.days_left === 1 ? '' : 's'})</div></div>
-        <div>${Math.round(100 * b.p_leftover)}% risk<div class="bar"><i style="width:${Math.round(100 * b.p_leftover)}%"></i></div><div class="muted">~${b.exp_leftover} left if we wait</div></div>
+        <div>${riskPill(b.p_leftover)} waste risk<div class="bar"><i style="width:${Math.round(100 * b.p_leftover)}%"></i></div><div class="muted">~${b.exp_leftover} left if we wait</div></div>
         <div><span class="pill ${pill(b)}">${verb(b)}</span></div>
         <div class="money">${b.value_rs > 0 ? '+' + rs(b.value_rs) : '—'}</div></div>`).join('') || '<p class="muted">No batch at risk for this store. Try "Every batch on hand", or a scenario with lower demand (e.g. a price rise).</p>';
     document.querySelectorAll('#ia-list .act').forEach(el => el.onclick = () => {
@@ -377,7 +403,9 @@ function renderIAct(p) {
         <p>${b.action === 'transfer' ? `Moving ${b.units} units earns <b>${rs(b.value_rs)}</b> more than letting them expire; the receiving store's forecast has room for them.` :
           b.action === 'markdown' ? `Marking down now is expected to earn <b>${rs(b.value_rs)}</b> more than waiting.` :
           b.action === 'hold' ? 'At risk, but no store has spare demand and a markdown would lose money.' :
-          b.action === 'clearance' ? 'Its last selling day is tomorrow: too late to move it to another store, so it goes 30% off on the day. Unwaste orders less next time to avoid this.' :
+          b.action === 'clearance' ? (() => { const x = p.series[b.series]; return `Its last selling day is tomorrow: too late to move it, so it goes 30% off on the day.<br><br><b>Prevention:</b> ` + (x.order === 0 && x.habit === 0
+            ? `nothing to order tonight; the ${x.on_hand} units on hand already cover tomorrow. This excess came from a 3-day order placed by habit; Unwaste orders daily, sized to the forecast.`
+            : `tonight's order is ${x.order} units with Unwaste vs ${x.habit} by habit. Expected waste from that delivery: <b>${x.waste_u}</b> vs ${x.waste_h} units (${rs((x.waste_h - x.waste_u) * x.price)} saved).`); })() :
           b.action === 'watch' ? 'Some risk, below the 60% line where Unwaste acts. Re-checked tomorrow night.' : 'Expected to sell before its sell-by line.'}</p>`;
     });
   };
@@ -394,9 +422,12 @@ function initFilters(p) {
   it.innerHTML = '<option value="">All items</option>' + cats.map(c => `<option value="cat:${c}">All ${c.replace('_', ' & ')}</option>`).join('') +
     items.map(i => `<option>${i}</option>`).join('');
   const redraw = () => { renderLive(LVP); renderIAct(LVP); };
-  st.onchange = redraw; it.onchange = redraw;
+  st.onchange = redraw; it.onchange = redraw; $('lv-sort').onchange = redraw;
+  $('lv-q').oninput = () => renderLive(LVP); $('ia-q').oninput = () => renderIAct(LVP);
 }
 function flt() { return {store: $('lv-store').value, item: $('lv-item').value}; }
+const hit = (q, ...xs) => !q || xs.some(x => (x || '').toLowerCase().includes(q.toLowerCase()));
+const riskPill = p => `<span class="risk ${p >= 0.6 ? 'hi' : p >= 0.3 ? 'mid' : ''}">${Math.round(100 * p)}%</span>`;
 function inItem(item, cat, f) { return !f.item || item === f.item || (f.item.startsWith('cat:') && cat === f.item.slice(4)); }
 function matchS(x, f) { return (!f.store || x.store === f.store) && inItem(x.item, x.cat, f); }
 function catOf(p, item) { const s = p.series.find(x => x.item === item); return s ? s.cat : ''; }
@@ -404,41 +435,64 @@ function filterLabel(f) { return `${f.store || 'All stores'} · ${!f.item ? 'all
 
 function renderLive(p) {
   initFilters(p);
-  const f = flt(), K = p.k, w = p.weather_used, fe = p.festival_used;
-  const kpi = (v, l, c) => `<div class="card"><div class="kpi ${c || ''}">${v}</div><div class="lbl">${l}</div></div>`;
-  const S = p.series.filter(x => matchS(x, f));
+  const f = flt(), K = p.k, w = p.weather_used, fe = p.festival_used, q = $('lv-q').value.trim();
+  const S = p.series.map((x, i) => ({...x, idx: i})).filter(x => matchS(x, f));
   const sum = (arr, key, d) => arr.reduce((t, x) => t + (d === undefined ? x[key] : x[key][d]), 0);
   const demand = sum(S, 'p50', K), normal = sum(S, 'normal', K), chg = normal ? Math.round(1000 * (demand / normal - 1)) / 10 : 0;
+  const idxs = new Set(S.map(x => x.idx));
+  const B = p.batches.filter(b => idxs.has(b.series));
+  const atRiskRs = B.reduce((t, b) => t + b.exp_leftover * b.price, 0), atRiskU = B.reduce((t, b) => t + b.exp_leftover, 0);
+  const riskyN = B.filter(b => b.p_leftover >= 0.6).length;
   const acts = p.actions.filter(a => (!f.store || a.store === f.store || a.to_store === f.store) && inItem(a.item, catOf(p, a.item), f));
-  const risky = p.batches.filter(b => matchS({...b, cat: catOf(p, b.item)}, f) && ['transfer', 'markdown', 'hold'].includes(b.action)).length;
-  const moveOut = acts.filter(a => a.action === 'transfer' && (!f.store || a.store === f.store)).reduce((t, a) => t + a.units, 0);
-  const moveIn = f.store ? acts.filter(a => a.action === 'transfer' && a.to_store === f.store).reduce((t, a) => t + a.units, 0) : 0;
+  const recovered = acts.filter(a => !f.store || a.store === f.store).reduce((t, a) => t + a.value_rs, 0);
+  const moved = acts.filter(a => a.action === 'transfer' && (!f.store || a.store === f.store)).reduce((t, a) => t + a.units, 0);
+  const wU = sum(S, 'waste_u'), wH = sum(S, 'waste_h'), wRsU = S.reduce((t, x) => t + x.waste_u * x.price, 0), wRsH = S.reduce((t, x) => t + x.waste_h * x.price, 0);
+  const lU = sum(S, 'lost_u'), lH = sum(S, 'lost_h'), oU = sum(S, 'order'), oH = sum(S, 'habit');
+  const wCut = wH ? Math.round(100 * (1 - wU / wH)) : 0;
   const fest = fe.fest_name ? `${fe.fest_name} ${fe.days_to_fest ? 'in ' + fe.days_to_fest + ' day(s)' : 'today'}` : 'no festival';
+  let h = `<div class="section-title"><h2>Plan for ${p.target} · ${filterLabel(f)}</h2><span class="muted">${w.temp}°C · ${w.rain} mm rain · ${fest}</span></div>
+    <div class="hero">
+      <div class="card ${chg >= 0 ? 'good' : 'warn'}"><div class="lbl">Expected demand</div><div class="kpi">${fmt(Math.round(demand))}</div>
+        <div class="sub"><b class="${chg >= 0 ? 'up' : 'down'}">${signed(chg, '%')}</b> vs a normal day (${fmt(Math.round(normal))})</div>
+        <div class="metric">P50 forecast · normal day = same date, average weather, no festival, today's prices</div></div>
+      <div class="card good"><div class="lbl">Waste from tonight's order</div><div class="kpi">${fmt(Math.round(wU))} units</div>
+        <div class="sub">by habit: ${fmt(Math.round(wH))} · <b>${wCut >= 0 ? '−' : '+'}${Math.abs(wCut)}%</b> · saves ${rs(wRsH - wRsU)}</div>
+        <div class="metric">Monte Carlo, ${p.mc_paths} demand paths: units of tonight's delivery still on the shelf at its sell-by line. Order ${fmt(oU)} vs ${fmt(oH)} by habit</div></div>
+      <div class="card warn"><div class="lbl">Already on the shelf, at risk</div><div class="kpi">${rs(atRiskRs)}</div>
+        <div class="sub">${fmt(Math.round(atRiskU))} units expected to expire · ${riskyN} batches ≥60% risk</div>
+        <div class="metric">Monte Carlo, oldest-first selling over the next 7 days, per batch on hand tonight</div></div>
+      <div class="card"><div class="lbl">Recovered by tonight's actions</div><div class="kpi">${rs(recovered)}</div>
+        <div class="sub">${fmt(moved)} units moved · ${acts.filter(a => a.action === 'markdown').length} early markdowns</div>
+        <div class="metric">Transfers (min-cost flow) and markdowns, valued against letting the stock expire</div></div>
+    </div>
+    <p class="muted" style="margin:8px 0 0">Trade-off: expected lost sales tomorrow ${fmt(Math.round(lU))} with Unwaste vs ${fmt(Math.round(lH))} by habit. Raise the service floor to lose fewer sales for a little more waste.</p>`;
   const single = S.length === 1;
-  const days = d => S.reduce((t, x) => t + x[d], 0);
   const tot = key => p.days.map((_, d) => Math.round(S.reduce((t, x) => t + x[key][d], 0)));
   const lines = [{name: 'Expected (P50)', data: tot('p50'), color: '#2B59F3'}, {name: 'Normal day', data: tot('normal'), color: '#9AA3B5', dash: true, width: 2}];
   if (single) lines.push({name: 'High (P90)', data: tot('p90'), color: '#9DB4F7', width: 1.5}, {name: 'Low (P10)', data: tot('p10'), color: '#9DB4F7', width: 1.5});
-  let h = `<h2>Plan for ${p.target} · ${filterLabel(f)}: ${w.temp}°C, ${w.rain} mm rain, ${fest}</h2>
-    <div class="row">${kpi(fmt(Math.round(demand)) + ' units', `expected demand (${signed(chg, '%')} vs a normal day)`, chg >= 0 ? 'good' : 'bad')}
-      ${kpi(fmt(sum(S, 'order')), `units to order tonight · ${fmt(sum(S, 'on_hand'))} on hand now`)}
-      ${kpi(fmt(risky), 'batches likely to be left over')}
-      ${kpi(f.store ? `${fmt(moveOut)} out · ${fmt(moveIn)} in` : fmt(moveOut), 'units moved between stores tonight')}</div>
-    <div class="card" style="margin-top:14px"><b>Next 7 days · ${filterLabel(f)} (units per day)</b>${svgLines(lines,
-      {h: 240, shade: p.days.map((d, i) => i === K), xlabels: p.days.map(d => d.slice(5))})}
+  h += `<div class="card" style="margin-top:14px"><b>Next 7 days · ${filterLabel(f)}</b>${svgLines(lines,
+      {h: 260, shade: p.days.map((d, i) => i === K), xlabels: p.days.map(d => d.slice(5)), ytitle: 'units per day', xtitle: 'date (shaded = day you plan for)'})}
       <p class="muted">${single ? 'Band = P10 to P90 for this store and item.' : 'Likely demand only: adding up each series’ low and high would not give the range of a total. Pick one store and one item to see the band.'}</p></div>`;
-  // table: one row per item, or per store when one item is picked across all stores
+  // table
   const byStore = !f.store && f.item && !f.item.startsWith('cat:');
   const groups = {};
   S.forEach(x => { const g = byStore ? x.store : x.item; (groups[g] = groups[g] || []).push(x); });
   const rowsOne = Object.values(groups).every(g => g.length === 1);
-  const rows = Object.entries(groups).map(([g, xs]) => ({name: g, normal: sum(xs, 'normal', K), p50: sum(xs, 'p50', K), p10: sum(xs, 'p10', K), p90: sum(xs, 'p90', K),
-    order: sum(xs, 'order'), on_hand: sum(xs, 'on_hand'), shelf: xs[0].shelf})).map(r => ({...r, chg: r.normal ? Math.round(1000 * (r.p50 / r.normal - 1)) / 10 : 0}))
-    .sort((a, b) => b.chg - a.chg);
-  h += `<h2>${byStore ? 'By store' : 'By item'}, ${p.target}</h2><div class="scroll"><table><tr><th>${byStore ? 'Store' : 'Item'}</th><th>Normal day</th><th>Expected${rowsOne ? ' (low–high)' : ''}</th><th>Change</th><th>Order tonight</th><th>On hand now</th>${byStore ? '' : '<th>Shelf life</th>'}</tr>${
-    rows.map(r => `<tr><td>${r.name}</td><td>${fmt(Math.round(r.normal))}</td><td><b>${fmt(Math.round(r.p50))}</b>${rowsOne ? ` <span class="muted">(${fmt(Math.round(r.p10))}–${fmt(Math.round(r.p90))})</span>` : ''}</td><td class="${r.chg > 3 ? 'up' : r.chg < -3 ? 'down' : ''}">${signed(r.chg, '%')}</td><td><b>${fmt(r.order)}</b></td><td>${fmt(r.on_hand)}</td>${byStore ? '' : `<td>${r.shelf} d</td>`}</tr>`).join('')}</table></div>`;
-  h += acts.length ? `<h2>Tonight's actions on risky batches</h2><table><tr><th>Action</th><th>Item</th><th>Store</th><th>Units</th><th>Chance left over</th><th>Sell-by</th><th>Value</th></tr>${
-      acts.slice(0, 25).map(a => `<tr><td><span class="pill ${a.action}">${a.action}</span></td><td>${a.item}</td><td>${a.store}${a.to_store ? ' → ' + a.to_store : ''}</td><td>${fmt(a.units)}</td><td>${Math.round(100 * a.p_leftover)}%</td><td>${a.sellby}</td><td>${rs(a.value_rs)}</td></tr>`).join('')}</table>`
+  let rows = Object.entries(groups).map(([g, xs]) => {
+    const ii = new Set(xs.map(x => x.idx)), bb = B.filter(b => ii.has(b.series));
+    const r = {name: g, normal: sum(xs, 'normal', K), p50: sum(xs, 'p50', K), p10: sum(xs, 'p10', K), p90: sum(xs, 'p90', K), order: sum(xs, 'order'), habit: sum(xs, 'habit'),
+      on_hand: sum(xs, 'on_hand'), shelf: xs[0].shelf, risk: bb.reduce((m, b) => Math.max(m, b.p_leftover), 0), exp: bb.reduce((t, b) => t + b.exp_leftover, 0),
+      rsk: bb.reduce((t, b) => t + b.exp_leftover * b.price, 0), stores: xs.map(x => x.store).join(' ')};
+    r.chg = r.normal ? Math.round(1000 * (r.p50 / r.normal - 1)) / 10 : 0; return r; })
+    .filter(r => hit(q, r.name, r.stores));
+  const sk = $('lv-sort').value;
+  rows.sort((a, b) => sk === 'name' ? a.name.localeCompare(b.name) : sk === 'chg' ? b.chg - a.chg : (b.rsk - a.rsk) || (b.risk - a.risk));
+  h += `<div class="section-title"><h2>${byStore ? 'By store' : 'By item'}, ${p.target}</h2><span class="muted">Waste risk = highest Monte Carlo chance that a batch on hand is still there at its sell-by line</span></div>
+    <div class="scroll"><table><tr><th>${byStore ? 'Store' : 'Item'}</th><th>Expected${rowsOne ? ' (low–high)' : ''}</th><th>vs normal</th><th>Order tonight <span class="vs">(habit)</span></th><th>On hand</th><th>Waste risk</th><th>Expected to expire</th>${byStore ? '' : '<th>Shelf life</th>'}</tr>${
+    rows.map(r => `<tr><td><b>${r.name}</b></td><td><b>${fmt(Math.round(r.p50))}</b>${rowsOne ? ` <span class="muted">(${fmt(Math.round(r.p10))}–${fmt(Math.round(r.p90))})</span>` : ''}</td><td class="${r.chg > 3 ? 'up' : r.chg < -3 ? 'down' : ''}">${signed(r.chg, '%')}</td><td><b>${fmt(r.order)}</b> <span class="vs">(${fmt(r.habit)})</span></td><td>${fmt(r.on_hand)}</td><td>${riskPill(r.risk)}</td><td>${r.exp >= 0.5 ? fmt(Math.round(r.exp)) + ' · ' + rs(r.rsk) : '—'}</td>${byStore ? '' : `<td>${r.shelf} d</td>`}</tr>`).join('') || '<tr><td colspan="8">No match.</td></tr>'}</table></div>`;
+  const actsQ = acts.filter(a => hit(q, a.item, a.store, a.to_store));
+  h += actsQ.length ? `<h2>Tonight's actions on risky batches</h2><table><tr><th>Action</th><th>Item</th><th>Store</th><th>Units</th><th>Waste risk</th><th>Sell-by</th><th>Value</th></tr>${
+      actsQ.slice(0, 25).map(a => `<tr><td><span class="pill ${a.action}">${a.action}</span></td><td>${a.item}</td><td>${a.store}${a.to_store ? ' → ' + a.to_store : ''}</td><td>${fmt(a.units)}</td><td>${riskPill(a.p_leftover)}</td><td>${a.sellby}</td><td><b>${rs(a.value_rs)}</b></td></tr>`).join('')}</table>`
     : `<p class="muted">No transfers or markdowns tonight for ${filterLabel(f)}.</p>`;
   $('lv-out').innerHTML = h;
 }

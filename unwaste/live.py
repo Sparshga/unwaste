@@ -25,7 +25,8 @@ from .decide import baseline_order, newsvendor_order
 from .forecast import WEATHER, _build_rows
 from .india_data import FEST_TYPES, FESTIVALS
 from .replay import POLICIES, Ledger, _nightly_actions, run_policy
-from .risk import batch_risk
+from .risk import Batch, batch_risk, simulate_fefo
+from .backends import sample_from_quantiles
 
 STATE = Path("models/live_state.pkl")
 H = 7
@@ -220,8 +221,20 @@ def predict(inputs: dict) -> dict:
         orders[s] = newsvendor_order(cur, F[0.1][s], F[0.5][s], F[0.9][s], t + 1, int(sell_days[s]),
                                      float(price[s]), cfg, rng)
         pos = sum(b.qty for b in cur if b.sellby >= t + 1)
-        habit[s] = baseline_order(st["S_tail"][s, -7:], pos, cfg)
+        habit[s] = baseline_order(st["S_tail"][s, -7:], pos, cfg)          # daily habit: recent sales + 15%
     on_hand = np.array([sum(b.qty for b in stock[s] if b.qty > 0) for s in range(len(meta))])
+
+    # KPI: expected waste from tonight's order and lost sales tomorrow, Unwaste vs habit (same demand paths)
+    rng_k = np.random.default_rng(cfg.seed + 2)
+    waste_u, waste_h, lost_u, lost_h = (np.zeros(len(meta)) for _ in range(4))
+    for s in range(len(meta)):
+        paths = np.round(sample_from_quantiles(F[0.1][s], F[0.5][s], F[0.9][s], cfg.mc_paths, rng_k))
+        cur = [Batch(b.qty, b.sellby, b.arrival) for b in stock[s] if b.qty > 0]
+        for q, wv, lv in ((orders[s], waste_u, lost_u), (habit[s], waste_h, lost_h)):
+            nb = Batch(int(q), t + int(sell_days[s]), t + 1)
+            sim = simulate_fefo(cur + [nb], paths, t + 1)
+            wv[s] = float(sim["leftover"][:, -1].mean()) if q > 0 else 0.0
+            lv[s] = float(sim["lost_by_day"][:, 0].mean())
 
     # per item, all stores
     df = pd.DataFrame({"item": meta["product_id"], "category": meta["cat"], "store": meta["store_id"],
@@ -267,6 +280,9 @@ def predict(inputs: dict) -> dict:
         "batches": batches[:400], "n_batches": len(batches), "stores": sorted(meta["store_id"].unique()),
         "series": [{"store": meta["store_id"].iloc[s], "item": meta["product_id"].iloc[s], "cat": meta["cat"].iloc[s],
                     "shelf": int(meta["shelf_life"].iloc[s]), "order": int(orders[s]), "on_hand": int(on_hand[s]),
+                    "habit": int(habit[s]), "price": float(price[s]),
+                    "waste_u": round(waste_u[s], 1), "waste_h": round(waste_h[s], 1),
+                    "lost_u": round(lost_u[s], 1), "lost_h": round(lost_h[s], 1),
                     "normal": np.round(F0[0.5][s], 1).tolist(), "p10": np.round(F[0.1][s], 1).tolist(),
                     "p50": np.round(F[0.5][s], 1).tolist(), "p90": np.round(F[0.9][s], 1).tolist()}
                    for s in range(len(meta))],
