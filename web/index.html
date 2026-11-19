@@ -5,8 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Unwaste · Manager screen</title>
 <!--
-  
-
+  Step 9 · The screen. It only reads the JSON files the nightly job writes (web/data/*.json).
 -->
 <style>
   :root{ --blue:#2B59F3; --lime:#D7F65A; --ink:#14171F; --bg:#F6F7FB; --card:#FFFFFF; --muted:#5B6270; --line:#E1E5EE; --red:#D64545; }
@@ -61,6 +60,7 @@
   <button data-tab="score">Replay scoreboard</button>
   <button data-tab="truth">Demand-truth test</button>
   <button data-tab="proof">Proof tests</button>
+  <button data-tab="india">India &amp; weather</button>
 </nav>
 <main>
   <!-- ======================= ACTIONS ======================= -->
@@ -95,6 +95,11 @@
     <h2>One real stockout day: sales seen vs demand recovered</h2>
     <div class="card" id="dchart"></div>
   </section>
+  <!-- ======================= INDIA & WEATHER (Phase 3) ======================= -->
+  <section id="tab-india" class="hide">
+    <div id="india"><p class="muted">No results yet: run <code>python -m unwaste.india</code></p></div>
+  </section>
+
   <!-- ======================= PROOF (Phase 2) ======================= -->
   <section id="tab-proof" class="hide">
     <div id="proof"><p class="muted">No proof results yet: run <code>python -m unwaste.proof</code></p></div>
@@ -108,7 +113,7 @@ const $ = id => document.getElementById(id);
 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
-  ['actions','score','truth','proof'].forEach(t => $('tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
+  ['actions','score','truth','proof','india'].forEach(t => $('tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
 });
 
 function svgBars(values, labels, opts = {}) {
@@ -149,6 +154,54 @@ function histogram(h, qty) {
   });
   s += `<text x="10" y="${H - 8}" font-size="11" fill="#5B6270">0 left</text><text x="${W - 10}" y="${H - 8}" font-size="11" fill="#5B6270" text-anchor="end">${qty} left</text>`;
   return s + '</svg>';
+}
+
+function pairTable(r) {
+  const row = (k, lbl, f) => `<tr><td>${lbl}</td><td>${f(r.baseline[k])}</td><td><b>${f(r.unwaste[k])}</b></td></tr>`;
+  const pct = v => v + '%';
+  return `<table><tr><th>Same scenario, two policies</th><th>Baseline</th><th>Unwaste</th></tr>
+    ${row('waste_pct_of_received', 'Waste % of received', pct)}${row('service_level_pct', 'Service level', pct)}
+    ${row('net_margin_rs', 'Net margin', rs)}${row('net_after_lost_sales_rs', 'Net after lost-sale cost', rs)}
+    ${row('transfer_units', 'Units transferred', fmt)}${row('shelf_life_breaches', 'Shelf-life breaches', fmt)}</table>`;
+}
+function signed(v, unit) { return (v >= 0 ? '+' : '−') + Math.abs(v) + unit; }
+function renderIndia(ind) {
+  const wf = ind.weather_in_forecast;
+  const bucketRows = arr => arr.map(b => `<tr><td>${b.bucket}</td><td>${signed(b.demand_vs_average_pct, '%')}</td><td>${fmt(b.days)}</td></tr>`).join('');
+  let h = `<h2>1 · Weather in the forecast</h2>
+    <div class="row">
+      <div class="card"><div class="kpi">${wf.wape_without_weather}%</div><div class="lbl">next-day error without weather</div></div>
+      <div class="card"><div class="kpi good">${wf.wape_with_weather}%</div><div class="lbl">with rain, temperature, humidity, wind</div></div>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <div style="flex:1;min-width:300px"><table><tr><th>Rain that day</th><th>Demand vs item average</th><th>Store-item-days</th></tr>${bucketRows(wf.by_rain)}</table></div>
+      <div style="flex:1;min-width:300px"><table><tr><th>Temperature</th><th>Demand vs item average</th><th>Store-item-days</th></tr>${bucketRows(wf.by_temp)}</table></div>
+    </div>`;
+  const iw = ind.indian_weather;
+  if (iw) {
+    h += `<h2>2 · What if these stores had Delhi-NCR weather? (${iw.window[0]} → ${iw.window[1]})</h2>
+      <p class="muted">Real weather of the same dates from ${iw.place}: avg ${iw.avg_temp_c}°C, ${iw.hot_days_35c} days ≥35°C, ${iw.total_rain_mm} mm rain, ${iw.heavy_rain_days} heavy-rain days. The weather-aware model turns this into a demand shift of ${signed(iw.demand_shift_pct, '%')}; then both policies are replayed on it.</p>
+      <div class="row">
+        <div class="card"><b>Demand index (100 = demand under the original weather)</b>${svgLines([{name: 'Demand index', data: iw.daily.demand_index, color: '#2B59F3'}],
+                                     {xlabels: iw.daily.dates.map((d, i) => i % 7 === 0 ? d.slice(5) : '')})}</div>
+        <div class="card"><b>Delhi-NCR weather, same dates</b>${svgLines([{name: 'Temperature °C', data: iw.daily.temp, color: '#D64545'},
+                                     {name: 'Rain mm', data: iw.daily.rain, color: '#9AA3B5'}],
+                                     {xlabels: iw.daily.dates.map((d, i) => i % 7 === 0 ? d.slice(5) : '')})}</div>
+      </div>
+      <div style="margin-top:12px">${pairTable(iw)}</div>`;
+  }
+  const ag = ind.agmarknet;
+  if (ag) {
+    const s = ag.series[ag.commodity];
+    h += `<h2>3 · Indian mandi price shock: ${ag.commodity}, ${ag.market}</h2>
+      <p class="muted">Worst 4-week window: ${ag.shock_window[0]} → ${ag.shock_window[1]}, price averaged ${ag.avg_price_vs_normal}× normal (peak ${ag.peak_price_vs_normal}×).
+      With a price elasticity of ${ag.elasticity} (stated assumption), demand moves between ${signed(ag.demand_swing_pct[0], '%')} and ${signed(ag.demand_swing_pct[1], '%')}. Both policies are replayed through that swing.</p>
+      <div class="card">${svgLines(Object.entries(ag.series).map(([k, v], i) => ({name: k + ' ₹/quintal (weekly)', data: v.price, color: ['#2B59F3', '#D64545', '#9AA3B5'][i % 3]})),
+                                   {xlabels: s.weeks.map((d, i) => i % 13 === 0 ? d.slice(0, 7) : '')})}</div>
+      <div style="margin-top:12px">${pairTable(ag)}</div>`;
+  }
+  h += `<p class="muted">Data: ${ind.source}${iw ? ' + Open-Meteo (India)' : ''}${ag ? ' + Agmarknet (India)' : ''}. Runtime ${ind.runtime_s}s.</p>`;
+  $('india').innerHTML = h;
 }
 
 async function load(name) {
@@ -236,6 +289,9 @@ async function load(name) {
       svgLines([{name: 'Sales recorded', data: ex.observed, color: '#9AA3B5'}, {name: 'Demand after correction', data: ex.corrected, color: '#2B59F3'}],
                {shade: ex.stockout, xlabels: ex.observed.map((_, i) => i % 3 === 0 ? i + ':00' : '')});
   }
+  // ---------------- India & weather (Phase 3, optional) ----------------
+  try { renderIndia(await load('india')); } catch (e) { /* not run yet */ }
+
   // ---------------- proof tests (Phase 2, optional) ----------------
   let proof = null;
   try { proof = await load('proof'); } catch (e) { return; }

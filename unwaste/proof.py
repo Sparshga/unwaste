@@ -1,7 +1,6 @@
 """
 Phase 2 · Proof tests: the checks we promised on the engineering slide.
 
-WHAT THIS FILE DOES (say this to a judge):
   "Four tests that try to break our own model.
    1. Forecast baselines: is LightGBM actually better than a 7-day average or
       'same as last week'?
@@ -14,7 +13,6 @@ WHAT THIS FILE DOES (say this to a judge):
 Run:  python -m unwaste.proof              (real data, ~3-5 min)
       python -m unwaste.proof --synthetic  (stand-in data, for testing)
 Output: web/data/proof.json  (shown in the 'Proof tests' tab)
-Owner: Ujjwal (tests 1-3), Sparsh (test 4), Aniz (screen).
 """
 from __future__ import annotations
 

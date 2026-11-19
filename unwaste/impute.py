@@ -1,7 +1,6 @@
 """
 Step 2 · Fill in demand hidden by empty shelves (stockout correction).
 
-WHAT THIS FILE DOES (say this to a judge):
   "When a shelf is empty, sales show zero even though customers wanted the item.
    We train a gradient-boosting model ONLY on hours when the shelf had stock, so it
    learns real demand. Then we ask it what the empty hours would have sold, and
@@ -10,7 +9,6 @@ WHAT THIS FILE DOES (say this to a judge):
 
 Input : Panel (hourly sales + stockout flags)
 Output: corrected hourly demand [rows, 24] and corrected daily demand
-Owner : Ujjwal.
 """
 from __future__ import annotations
 

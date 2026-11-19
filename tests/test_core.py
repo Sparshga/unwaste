@@ -74,3 +74,19 @@ def test_forecast_baselines_and_errors():
     sn = forecast_errors(B["Same weekday last week"], Y, 20, 7)
     assert sn["next_day"] == 0.0 and sn["week"] == 0.0                   # perfect on a pure weekly pattern
     assert forecast_errors(B["Moving average (7 days)"], Y, 20, 7)["week"] > 0
+
+
+def test_open_meteo_and_agmarknet_loaders(tmp_path):
+    import json
+    import pandas as pd
+    from unwaste.india import load_agmarknet, load_open_meteo
+    (tmp_path / "weather_x.json").write_text(json.dumps({"daily": {
+        "time": ["2024-06-01", "2024-06-02"], "temperature_2m_mean": [35.0, 30.0],
+        "precipitation_sum": [0.0, 25.0], "relative_humidity_2m_mean": [30, 80],
+        "wind_speed_10m_mean": [10.0, 20.0]}}))
+    wx = load_open_meteo(tmp_path / "weather_x.json")
+    assert list(wx.columns) == ["rain", "temp", "humidity", "wind"] and wx["rain"].iloc[1] == 25.0
+    pd.DataFrame({"Arrival_Date": ["01/07/2023", "02/07/2023"], "Modal_Price": ["1,500", "4,500"]}) \
+        .to_csv(tmp_path / "agmarknet_tomato.csv", index=False)
+    agm = load_agmarknet(tmp_path)
+    assert agm["Tomato"]["price"].tolist() == [1500.0, 4500.0]

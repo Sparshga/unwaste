@@ -1,7 +1,6 @@
 """
 Step 1 · Clean & prepare.
 
-WHAT THIS FILE DOES (say this to a judge):
   "We load FreshRetailNet-50K: one row per store, item and day, with 24 hourly
    sales numbers and 24 hourly stock flags. We keep one city to make the demo fast,
    mark every hour where the shelf was empty, and rescale the anonymised sales to
@@ -12,7 +11,6 @@ Input : parquet files in cfg.data_dir   (or synthetic)
 Output: Panel(daily=DataFrame, hourly_sales=array, hourly_oos=array, meta=DataFrame)
         daily has one row per (series, day); the two arrays are [rows, 24].
 
-Owner: Ujjwal.
 """
 from __future__ import annotations
 
@@ -30,9 +28,9 @@ COL = dict(
     city="city_id", store="store_id", product="product_id", cat="first_category_id",
     date="dt", sale="sale_amount", hours_sale="hours_sale", hours_stock="hours_stock_status",
     discount="discount", holiday="holiday_flag", activity="activity_flag",
-    rain="precpt", temp="avg_temperature",
+    rain="precpt", temp="avg_temperature", humidity="avg_humidity", wind="avg_wind_level",
 )
-OPTIONAL = ["discount", "holiday", "activity", "rain", "temp", "cat"]
+OPTIONAL = ["discount", "holiday", "activity", "rain", "temp", "humidity", "wind", "cat"]
 
 
 @dataclass
@@ -126,7 +124,11 @@ def make_synthetic(cfg: Config, n_days: int = 90, n_cities: int = 1) -> pd.DataF
             for di, d in enumerate(dates):
                 disc = 1.0 if rng.random() > 0.12 else rng.choice([0.85, 0.9])
                 hol = int(d.day_of_week >= 5)
-                lam = lam_base * dow[d.day_of_week] * (1 + 1.8 * (1 - disc))
+                rain = float(rng.gamma(0.5, 2)) * (3 if rng.random() < 0.15 else 1)
+                temp = float(rng.normal(27, 5))
+                # weather moves demand: heavy rain keeps shoppers in (more orders), heat lifts dairy/drinks
+                wx = (1 + 0.25 * (rain > 5)) * (1 + 0.02 * max(temp - 30, 0))
+                lam = lam_base * dow[d.day_of_week] * (1 + 1.8 * (1 - disc)) * wx
                 hourly_lam = lam * hour_profile * 10
                 demand = rng.poisson(hourly_lam)
                 stock = rng.poisson(max(lam * 10 * rng.uniform(0.7, 1.6), 1))
@@ -145,7 +147,9 @@ def make_synthetic(cfg: Config, n_days: int = 90, n_cities: int = 1) -> pd.DataF
                     COL["date"]: d.strftime("%Y-%m-%d"), COL["sale"]: float(sold.sum() * scale),
                     COL["hours_sale"]: (sold * scale).tolist(), COL["hours_stock"]: oos.tolist(),
                     COL["discount"]: float(disc), COL["holiday"]: hol, COL["activity"]: int(disc < 1),
-                    COL["rain"]: float(rng.gamma(0.5, 2)), COL["temp"]: float(rng.normal(22, 4)),
+                    COL["rain"]: rain, COL["temp"]: temp,
+                    COL["humidity"]: float(np.clip(60 + 3 * rain + rng.normal(0, 8), 20, 100)),
+                    COL["wind"]: float(abs(rng.normal(2, 1))),
                 })
     print(f"[data] SYNTHETIC stand-in: {S} stores x {P} products x {n_days} days")
     return pd.DataFrame(rows)

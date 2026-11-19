@@ -1,12 +1,10 @@
 """
 Step 0 · Config: every knob in one place.
 
-WHAT THIS FILE DOES (say this to a judge):
   "All assumptions live here: prices, transfer cost, salvage value, lead time,
    service floor, which city we run on. Nothing is hidden inside the code, so we
    can change one number and rerun the whole replay."
 
-Owner: everyone (read it first).
 """
 from __future__ import annotations
 
@@ -47,6 +45,8 @@ class Config:
     horizon_days: int = 7                        # forecast the next 7 days
     mc_paths: int = 300                          # Monte Carlo replays per decision
     n_estimators: int = 200                      # boosting rounds per model
+    use_weather: bool = True                     # rain, temperature, humidity, wind as forecast inputs
+    relative_target: bool = False                # predict demand relative to the recent 14-day level
     seed: int = 7
 
     # ---------- policy ----------

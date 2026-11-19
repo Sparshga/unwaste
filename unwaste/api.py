@@ -1,7 +1,6 @@
 """
 Step 10 · Serve the screen and the JSON outputs.
 
-
   "A small FastAPI app. It serves the manager screen and exposes the nightly outputs
    as JSON endpoints: /api/scoreboard, /api/actions, /api/demand-truth. In production
    the store-ops app would call these same endpoints."

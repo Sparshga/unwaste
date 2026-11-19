@@ -1,13 +1,11 @@
 """
 Library adapters: LightGBM + OR-Tools when installed, safe fallbacks otherwise.
 
-WHAT THIS FILE DOES (say this to a judge):
   "Our two heavy libraries are LightGBM for forecasting and Google OR-Tools for the
    transfer optimisation. This file is the only place that talks to them, so if a
    laptop can't install one, the same code runs on scikit-learn's gradient boosting
    or NetworkX's min-cost flow, and the results are the same kind of answer."
 
-Owner: Sparsh.
 """
 from __future__ import annotations
 

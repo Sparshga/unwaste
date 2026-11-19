@@ -1,7 +1,6 @@
 """
 Step 4 · Batch risk: Monte Carlo replay of FEFO.
 
-WHAT THIS FILE DOES (say this to a judge):
   "FEFO is a picking rule: the oldest pack leaves first. It can't tell you whether
    a batch will sell in time. So we replay the next week many times. Each replay
    draws a realistic demand path from the forecast range and sells oldest-first,
@@ -10,7 +9,6 @@ WHAT THIS FILE DOES (say this to a judge):
 
 Input : current batches + incoming orders, forecast quantiles for the next days
 Output: per-batch leftover samples -> P(leftover), expected and median leftover units
-Owner : Sparsh.
 """
 from __future__ import annotations
 

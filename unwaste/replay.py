@@ -1,7 +1,6 @@
 """
 Step 8 · Decision replay: baseline vs Unwaste on the SAME demand.
 
-WHAT THIS FILE DOES (say this to a judge):
   "We replay the last 4 weeks day by day for every store and item. Both policies face
    exactly the same customer demand, so the comparison is fair. The baseline is a
    common simple approach: reorder from the recent average, sell oldest-first, and
@@ -10,7 +9,6 @@ WHAT THIS FILE DOES (say this to a judge):
    we log what each policy did, and at the end we count waste, rupees, service level,
    false moves and shelf-life breaches."
 
-Owner: Aniz (scoreboard), Sparsh (actions).
 """
 from __future__ import annotations
 

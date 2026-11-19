@@ -1,7 +1,6 @@
 """
 The nightly job: runs steps 1-8 end to end and writes everything the screen shows.
 
-WHAT THIS FILE DOES (say this to a judge):
   "One command runs the whole pipeline: clean the data, fill in hidden demand,
    forecast ranges, replay the last four weeks for four policies on identical demand,
    and write the scoreboard, the demand-truth test and every store's action list as
@@ -9,7 +8,6 @@ WHAT THIS FILE DOES (say this to a judge):
 
 Run:  python -m unwaste.pipeline            (real data)
       python -m unwaste.pipeline --synthetic (stand-in data, for testing)
-Owner: Aniz (outputs), everyone (run it).
 """
 from __future__ import annotations
 

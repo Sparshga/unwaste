@@ -1,7 +1,6 @@
 """
 Steps 5-7 · Decide: recover this batch, prevent recurrence, guardrails.
 
-
   "For every risky batch we price the options in rupees. A transfer earns
    price - transfer cost - salvage per unit, but only into a store with spare demand,
    only if the cups still have legal shelf life on arrival, and only if it beats a
@@ -9,7 +8,6 @@ Steps 5-7 · Decide: recover this batch, prevent recurrence, guardrails.
    OR-Tools. Whatever surplus is left gets an early markdown if it pays. Separately,
    the next order is set with the newsvendor rule: order up to the 85th percentile
    of demand, so we cut waste without emptying shelves."
-
 
 """
 from __future__ import annotations

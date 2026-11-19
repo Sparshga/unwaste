@@ -1,7 +1,6 @@
 """
 Step 3 · Forecast demand as a range (P10 / P50 / P90).
 
-WHAT THIS FILE DOES (say this to a judge):
   "One global LightGBM model for every store and item. Standing on any night, it
    predicts each of the next 7 days, and instead of one number it gives a low,
    middle and high case. Inputs are things we'd know that night: recent demand,
@@ -11,7 +10,6 @@ WHAT THIS FILE DOES (say this to a judge):
 
 Input : demand matrix [series, days] (corrected, or raw for the ablation)
 Output: dict {0.1: F10, 0.5: F50, 0.9: F90}, each [series, origin_day, horizon]
-Owner : Ujjwal.
 """
 from __future__ import annotations
 
@@ -30,9 +28,12 @@ def to_matrix(daily: pd.DataFrame, value: str) -> tuple[np.ndarray, pd.DatetimeI
     return m.to_numpy(), pd.DatetimeIndex(m.columns)
 
 
+WEATHER = ["rain", "temp", "humidity", "wind"]
+
+
 def exo_matrices(daily: pd.DataFrame) -> dict:
     out = {}
-    for c in ["discount", "holiday", "activity"]:
+    for c in ["discount", "holiday", "activity"] + [w for w in WEATHER if w in daily.columns]:
         out[c] = daily.pivot_table(index="series_id", columns="dt", values=c, aggfunc="mean") \
             .sort_index().sort_index(axis=1).fillna(0).to_numpy()
     return out
@@ -67,6 +68,7 @@ def _build_rows(Y, exo, dates, origins, H, series_codes):
                    "same_dow": sd,
                    "discount": exo["discount"][:, tt], "holiday": exo["holiday"][:, tt],
                    "activity": exo["activity"][:, tt],
+                   **{w: exo[w][:, tt] for w in WEATHER if w in exo},
                    "store": series_codes[0], "product": series_codes[1],
                    "series": np.arange(S), "origin": np.full(S, o),
                    "target": Y[:, t] if t < T else np.full(S, np.nan)}
@@ -74,12 +76,14 @@ def _build_rows(Y, exo, dates, origins, H, series_codes):
     return pd.concat(blocks, ignore_index=True)
 
 
-FEATS = ["last", "m7", "m14", "m28", "sd14", "h", "dow", "same_dow", "discount", "holiday",
-         "activity", "store", "product"]
+BASE_FEATS = ["last", "m7", "m14", "m28", "sd14", "h", "dow", "same_dow", "discount", "holiday",
+              "activity", "store", "product"]
+FEATS = BASE_FEATS + WEATHER          # weather of the target day (from a weather forecast in production)
 
 
 def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "",
-                 train_mask: np.ndarray | None = None, quiet: bool = False) -> dict:
+                 train_mask: np.ndarray | None = None, quiet: bool = False,
+                 weather_override: dict | None = None) -> dict:
     """Train on the first (T - test_days) days, return forecasts for every origin in the test.
     train_mask (bool per series): Phase 2 tests train on some series and forecast the others."""
     S, T = Y.shape
@@ -97,13 +101,31 @@ def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "
     if train_mask is not None:
         train = train[train_mask[train["series"].to_numpy()]]
     test_origins = list(range(train_end, T))
-    test = _build_rows(Y, exo, dates, test_origins, H, codes)
+    exo_test = exo
+    if weather_override:                       # what-if: same stores, different weather in the test weeks
+        exo_test = {k: v.copy() for k, v in exo.items()}
+        for k, vec in weather_override.items():
+            exo_test[k][:, train_end + 1:] = np.asarray(vec)[None, train_end + 1:]
+    test = _build_rows(Y, exo_test, dates, test_origins, H, codes)
+    feats = FEATS if (cfg.use_weather and all(w in train.columns for w in WEATHER)) else BASE_FEATS
+    if cfg.relative_target:
+        # predict demand RELATIVE to the item's recent level (last 14 days), then scale back.
+        # Trees can't extrapolate, so this lets forecasts follow sudden level shifts
+        # (price shocks, new stores) instead of anchoring to the levels seen in training.
+        for df in (train, test):
+            df["level"] = df["m14"].fillna(df["m7"]).fillna(0) + 1.0
+            for c in ["last", "m7", "m14", "m28", "sd14", "same_dow"]:
+                df[c] = df[c] / df["level"]
+        train["target"] = train["target"] / train["level"]
+        feats = feats + ["level"]
 
     out = {}
     for q in cfg.quantiles:
         m = quantile_model(q, seed=cfg.seed, n_estimators=cfg.n_estimators)
-        m.fit(train[FEATS].to_numpy(), train["target"].to_numpy())
-        pred = np.clip(m.predict(test[FEATS].to_numpy()), 0, None)
+        m.fit(train[feats].to_numpy(), train["target"].to_numpy())
+        pred = np.clip(m.predict(test[feats].to_numpy()), 0, None)
+        if cfg.relative_target:
+            pred = pred * test["level"].to_numpy()
         F = np.full((S, T, H), np.nan)
         F[test["series"].to_numpy(), test["origin"].to_numpy(), test["h"].to_numpy() - 1] = pred
         out[q] = F
@@ -111,7 +133,7 @@ def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "
     out[0.1] = np.minimum(out[0.1], out[0.5])
     out[0.9] = np.maximum(out[0.9], out[0.5])
 
-    # quick accuracy report on the test window (horizon 1)
+    # quick accuracy report on the test window (horizon 1); target column is still in units
     tgt = test.dropna(subset=["target"])
     sel = tgt[tgt["h"] == 1]
     p50 = out[0.5][sel["series"], sel["origin"], 0]
@@ -122,5 +144,6 @@ def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "
         print(f"[forecast{label}] train rows {len(train):,}; next-day WAPE {wape:.0%}; "
               f"actuals inside P10-P90: {inside:.0%} (ideal ~80%)")
     out["train_end"] = train_end
+    out["features"] = feats
     out["metrics"] = {"wape_h1": float(wape), "coverage_p10_p90": float(inside)}
     return out
