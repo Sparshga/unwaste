@@ -199,7 +199,7 @@ function renderIndia(ind) {
   const ag = ind.agmarknet;
   if (ag) {
     const s = ag.series[ag.commodity];
-    h += `<h2>3 · Indian mandi price shock: ${ag.commodity}, ${ag.market} ${tag('mandi')}</h2>
+    h += `<h2>3 · Indian mandi price shock: ${ag.commodity}, ${src.mandi === 'generated' ? 'Delhi mandi' : ag.market} ${tag('mandi')}</h2>
       <p class="muted">Worst 4-week window: ${ag.shock_window[0]} → ${ag.shock_window[1]}, price averaged ${ag.avg_price_vs_normal}× normal (peak ${ag.peak_price_vs_normal}×).
       With a price elasticity of ${ag.elasticity} (stated assumption), demand moves between ${signed(ag.demand_swing_pct[0], '%')} and ${signed(ag.demand_swing_pct[1], '%')}. Both policies are replayed through that swing.</p>
       <div class="card">${svgLines(Object.entries(ag.series).map(([k, v], i) => ({name: k + ' ₹/quintal (weekly)', data: v.price, color: ['#2B59F3', '#D64545', '#9AA3B5'][i % 3]})),
@@ -209,7 +209,7 @@ function renderIndia(ind) {
         ${ag.price_aware ? `<div style="flex:1;min-width:320px"><b>B · Forecast reads today's mandi price</b> <span class="muted">(assumes elasticity ${ag.forecast_elasticity}, true is ${ag.elasticity})</span>${pairTable(ag.price_aware)}</div>` : ''}
       </div>`;
   }
-  h += `<p class="muted">Data: ${ind.source}${iw ? ' + Open-Meteo (India)' : ''}${ag ? ' + Agmarknet (India)' : ''}. Runtime ${ind.runtime_s}s.</p>`;
+  h += `<p class="muted">Data: ${ind.source}${iw ? (src.weather === 'generated' ? ' + generated Delhi weather' : ' + Open-Meteo (India, real)') : ''}${ag ? (src.mandi === 'generated' ? ' + generated mandi prices (Agmarknet format)' : ' + Agmarknet (India, real)') : ''}. Runtime ${ind.runtime_s}s.</p>`;
   $('india').innerHTML = h;
 }
 
