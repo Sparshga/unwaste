@@ -301,9 +301,9 @@ function renderIMain(m) {
   h += `<h2>Hidden demand on empty-shelf days</h2><div class="row">
       ${kpi(m.fill_in.stockout_days_pct + '%', 'of store-item-days had an empty shelf for some hours')}
       ${kpi(m.fill_in.error_sales_as_demand + '% → ' + m.fill_in.error_filled + '%', 'error vs true demand on those days: sales as-is → filled in', 'good')}</div>
-    <h2>Replay: the same true demand, three ways of ordering</h2>
+    <h2>Replay: the same true demand, four ways of ordering</h2>
     <table><tr><th>Policy</th><th>Waste %</th><th>Service %</th><th>Net after lost-sale cost</th><th>Units moved</th><th>Shelf-life breaches</th></tr>${
-      ['baseline', 'forecast_corrected', 'unwaste'].map(k => `<tr class="${k === 'unwaste' ? 'win' : ''}"><td>${r[k].label}</td><td>${r[k].waste_pct_of_received}%</td><td>${r[k].service_level_pct}%</td><td>${rs(r[k].net_after_lost_sales_rs)}</td><td>${fmt(r[k].transfer_units || 0)}</td><td>${r[k].shelf_life_breaches ?? 0}</td></tr>`).join('')}</table>
+      ['baseline', 'forecast_raw', 'forecast_corrected', 'unwaste'].filter(k => r[k]).map(k => `<tr class="${k === 'unwaste' ? 'win' : ''}"><td>${r[k].label}</td><td>${r[k].waste_pct_of_received}%</td><td>${r[k].service_level_pct}%</td><td>${rs(r[k].net_after_lost_sales_rs)}</td><td>${fmt(r[k].transfer_units || 0)}</td><td>${r[k].shelf_life_breaches ?? 0}</td></tr>`).join('')}</table>
     ${m.dial ? `<h2>The service dial: fewer empty shelves costs a little more waste</h2><table><tr><th>Order at least the … of tomorrow's demand</th><th>Waste %</th><th>Service %</th><th>Net after lost-sale cost</th></tr>${
       m.dial.map(x => `<tr><td>${Math.round(100 * x.service_floor)}th percentile</td><td>${x.waste_pct}%</td><td>${x.service_pct}%</td><td>${rs(x.net_after_lost_rs)}</td></tr>`).join('')}</table>` : ''}
     <p class="muted">Forecast inputs: ${m.features.join(', ')}. Engine: ${m.backends.forecast} · ${m.backends.optimiser}.</p>`;

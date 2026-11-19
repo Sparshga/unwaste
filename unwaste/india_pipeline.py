@@ -98,6 +98,7 @@ def run(fast: bool = False) -> dict:
     # 2. forecast: ours vs no-calendar vs simple baselines, on the test window
     F = fit_forecast(Y, d, cfg, " Unwaste (weather + festivals + price)")
     F_nc = fit_forecast(Y, d, replace(cfg, use_festivals=False, calendar_feats=False), " without calendar", quiet=True)
+    F_raw = fit_forecast(S_obs, d, cfg, " on raw sales (no fill-in)", quiet=True)
     te = F["train_end"]
     P_ours, P_nc = F[0.5][:, :, 0], F_nc[0.5][:, :, 0]
     P_ma = np.full_like(P_ours, np.nan)
@@ -132,8 +133,9 @@ def run(fast: bool = False) -> dict:
     # 3. replay: reality = TRUE demand; policies only see sales and forecasts
     D = np.round(Y_true).astype(int)
     rep, ledgers = {}, {}
-    for key in ["baseline", "forecast_corrected", "unwaste"]:
-        led = run_policy(POLICIES[key], D, S_obs, F, meta, cfg, log_actions=(key == "unwaste"))
+    for key in ["baseline", "forecast_raw", "forecast_corrected", "unwaste"]:
+        led = run_policy(POLICIES[key], D, S_obs, F_raw if key == "forecast_raw" else F, meta, cfg,
+                         log_actions=(key == "unwaste"))
         ledgers[key] = led
         rep[key] = {"label": POLICIES[key].name, **led.summary(), "transfer_units": led.transfer_units,
                     "markdowns": led.markdowns}
@@ -182,6 +184,14 @@ def run(fast: bool = False) -> dict:
             a["sellby_date"] = str((dates[0] + pd.Timedelta(days=int(a["sellby"]))).date())
             acts.append(a)
     Path(cfg.out_dir).mkdir(parents=True, exist_ok=True)
+
+    # arrays for the results script (scripts/india_results.py)
+    so_m, _ = to_matrix(d, "stockout_hours")
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(STATE.parent / "india_eval.npz", dates=dates.astype(str).to_numpy(), Y=Y, S=S_obs, Y_true=Y_true,
+                        stockout=so_m, te=te, p10=F[0.1][:, te:, 0], p50=F[0.5][:, te:, 0], p90=F[0.9][:, te:, 0],
+                        p50_nc=P_nc[:, te:], p50_raw=F_raw[0.5][:, te:, 0], stores=meta["store_id"].to_numpy(),
+                        items=meta["product_id"].to_numpy(), cats=meta["cat"].to_numpy())
 
     # 5. live state: production model on ALL days + the stock on hand tonight
     cfg_live = replace(cfg, test_days=1)
