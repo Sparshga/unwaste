@@ -179,6 +179,10 @@ function renderIndia(ind) {
       <div class="card"><div class="kpi">${wf.wape_without_weather}%</div><div class="lbl">next-day error without weather</div></div>
       <div class="card"><div class="kpi ${wf.wape_with_weather < wf.wape_without_weather ? 'good' : ''}">${wf.wape_with_weather}%</div><div class="lbl">with rain, temperature, humidity, wind</div></div>
     </div>
+    ${wf.wape_heavy_rain_with !== undefined ? `<p class="muted" style="margin-top:10px">Rare days hide in the average. Error on rainy store-days only:</p>
+    <table><tr><th>Days</th><th>Without weather</th><th>With weather</th><th>Store-days</th></tr>
+      <tr><td>Rainy (&gt;1 mm)</td><td>${wf.wape_rainy_without}%</td><td><b>${wf.wape_rainy_with}%</b></td><td>${fmt(wf.n_rainy_store_days)}</td></tr>
+      <tr><td>Heavy rain (&gt;10 mm)</td><td>${wf.wape_heavy_rain_without}%</td><td><b>${wf.wape_heavy_rain_with}%</b></td><td>${fmt(wf.n_heavy_rain_store_days)}</td></tr></table>` : ''}
     <div class="row" style="margin-top:14px">
       <div style="flex:1;min-width:300px"><table><tr><th>Rain that day</th><th>Demand vs item average</th><th>Store-item-days</th></tr>${bucketRows(wf.by_rain)}</table></div>
       <div style="flex:1;min-width:300px"><table><tr><th>Temperature</th><th>Demand vs item average</th><th>Store-item-days</th></tr>${bucketRows(wf.by_temp)}</table></div>

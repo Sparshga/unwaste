@@ -30,7 +30,7 @@ import pandas as pd
 
 from .config import Config, default_config
 from .data import build_panel
-from .forecast import WEATHER, fit_forecast, to_matrix
+from .forecast import exo_matrices, WEATHER, fit_forecast, to_matrix
 from .impute import correct_demand
 from .replay import POLICIES, run_policy
 
@@ -83,12 +83,14 @@ def load_agmarknet(folder: Path = INDIA_DIR) -> dict:
 
 
 # ----------------------------------------------------------------------------- helpers
-def _wape(P50, Y, te, H=7):
+def _wape(P50, Y, te, H=7, mask=None):
+    """Next-day WAPE over the test window; mask[S, T] keeps only some store-days (e.g. heavy rain)."""
     err = tot = 0.0
     for h in (1,):
         for o in range(te, Y.shape[1] - h):
-            err += np.abs(P50[:, o, h - 1] - Y[:, o + h]).sum()
-            tot += Y[:, o + h].sum()
+            keep = np.ones(Y.shape[0], bool) if mask is None else mask[:, o + h]
+            err += np.abs(P50[keep, o, h - 1] - Y[keep, o + h]).sum()
+            tot += Y[keep, o + h].sum()
     return float(round(100 * err / max(tot, 1e-9), 1))
 
 
@@ -131,7 +133,16 @@ def weather_in_forecast(Y, daily, cfg) -> tuple[dict, dict]:
     res["by_temp"] = [{"bucket": str(k), "demand_vs_average_pct": round(100 * (v - 1), 1), "days": int(n)}
                       for (k, v), n in zip(d.groupby(temp_b, observed=True)["rel"].mean().items(),
                                            d.groupby(temp_b, observed=True).size())]
+    # the average hides rare days: error on rainy store-days only
+    rain = exo_matrices(daily)["rain"]
+    for key, m in (("rainy", rain > 1), ("heavy_rain", rain > 10)):
+        res[f"wape_{key}_with"] = _wape(F_w[0.5], Y, te, mask=m)
+        res[f"wape_{key}_without"] = _wape(F_n[0.5], Y, te, mask=m)
+        res[f"n_{key}_store_days"] = int(m[:, te + 2:].sum())
     print(f"[india] forecast error with weather {res['wape_with_weather']}% vs without {res['wape_without_weather']}%")
+    print(f"[india]   rainy days (>1 mm): {res['wape_rainy_with']}% vs {res['wape_rainy_without']}%; "
+          f"heavy rain (>10 mm, {res['n_heavy_rain_store_days']} store-days): "
+          f"{res['wape_heavy_rain_with']}% vs {res['wape_heavy_rain_without']}%")
     return res, F_w
 
 
