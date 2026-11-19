@@ -177,7 +177,7 @@ function renderIndia(ind) {
   let h = `<h2>1 · Weather in the forecast</h2>
     <div class="row">
       <div class="card"><div class="kpi">${wf.wape_without_weather}%</div><div class="lbl">next-day error without weather</div></div>
-      <div class="card"><div class="kpi good">${wf.wape_with_weather}%</div><div class="lbl">with rain, temperature, humidity, wind</div></div>
+      <div class="card"><div class="kpi ${wf.wape_with_weather < wf.wape_without_weather ? 'good' : ''}">${wf.wape_with_weather}%</div><div class="lbl">with rain, temperature, humidity, wind</div></div>
     </div>
     <div class="row" style="margin-top:14px">
       <div style="flex:1;min-width:300px"><table><tr><th>Rain that day</th><th>Demand vs item average</th><th>Store-item-days</th></tr>${bucketRows(wf.by_rain)}</table></div>
@@ -204,7 +204,10 @@ function renderIndia(ind) {
       With a price elasticity of ${ag.elasticity} (stated assumption), demand moves between ${signed(ag.demand_swing_pct[0], '%')} and ${signed(ag.demand_swing_pct[1], '%')}. Both policies are replayed through that swing.</p>
       <div class="card">${svgLines(Object.entries(ag.series).map(([k, v], i) => ({name: k + ' ₹/quintal (weekly)', data: v.price, color: ['#2B59F3', '#D64545', '#9AA3B5'][i % 3]})),
                                    {xlabels: s.weeks.map((d, i) => i % 13 === 0 ? d.slice(0, 7) : '')})}</div>
-      <div style="margin-top:12px">${pairTable(ag)}</div>`;
+      <div class="row" style="margin-top:12px">
+        <div style="flex:1;min-width:320px"><b>A · Forecast ignores the mandi price</b>${pairTable(ag)}</div>
+        ${ag.price_aware ? `<div style="flex:1;min-width:320px"><b>B · Forecast reads today's mandi price</b> <span class="muted">(assumes elasticity ${ag.forecast_elasticity}, true is ${ag.elasticity})</span>${pairTable(ag.price_aware)}</div>` : ''}
+      </div>`;
   }
   h += `<p class="muted">Data: ${ind.source}${iw ? ' + Open-Meteo (India)' : ''}${ag ? ' + Agmarknet (India)' : ''}. Runtime ${ind.runtime_s}s.</p>`;
   $('india').innerHTML = h;

@@ -36,6 +36,7 @@ from .replay import POLICIES, run_policy
 
 INDIA_DIR = Path("data/raw/india")
 PRICE_ELASTICITY = -0.4          # +10% price -> about -4% demand (stated assumption)
+FORECAST_ELASTICITY = -0.3       # what the price-aware forecast assumes: deliberately NOT the true -0.4
 
 
 # ----------------------------------------------------------------------------- loaders
@@ -214,8 +215,20 @@ def agmarknet_shock(Y, Y_raw, daily, meta, agm: dict, cfg, test_days: int) -> di
     mult = np.ones(T)
     mult[te + 1:] = mult_test[-(T - te - 1):]
     Y_s, S_s = _scale_test(Y, te, mult), _scale_test(Y_raw, te, mult)
+    D_s = np.round(Y_s).astype(int)
     F_s = fit_forecast(Y_s, daily, cfg, " mandi shock", quiet=True)
-    res = _replay_pair(np.round(Y_s).astype(int), S_s, F_s, meta, cfg)
+    res = _replay_pair(D_s, S_s, F_s, meta, cfg)                    # forecast ignores the mandi price
+
+    # Price-aware forecast: today's mandi price is public before tonight's order.
+    # Divide past demand by the price effect, forecast the "price-free" demand, then multiply
+    # back by today's price effect. It uses a guessed elasticity (-0.3), not the true -0.4.
+    m_hat = np.ones(T)
+    m_hat[te + 1:] = np.clip(path[-(T - te - 1):] ** FORECAST_ELASTICITY, 0.4, 1.6)
+    F_p = fit_forecast(Y_s / m_hat[None, :], daily, cfg, " mandi shock, price-aware", quiet=True)
+    for q in cfg.quantiles:
+        F_p[q] = F_p[q] * m_hat[None, :, None]                       # origin day's price level
+    res["price_aware"] = _replay_pair(D_s, S_s, F_p, meta, cfg)
+    res["forecast_elasticity"] = FORECAST_ELASTICITY
     weekly = agm[name]["price"].resample("W").mean().dropna()
     res.update({
         "commodity": name, "market": "Azadpur, Delhi (Agmarknet)",
@@ -229,6 +242,10 @@ def agmarknet_shock(Y, Y_raw, daily, meta, agm: dict, cfg, test_days: int) -> di
     })
     print(f"[india] Agmarknet shock ({name} {res['shock_window'][0]}→{res['shock_window'][1]}, "
           f"avg {peak:.2f}x normal): waste change {-res['waste_reduction_pct']:+.1f}%, service {res['service_change_pts']:+.2f} pts")
+    pa = res["price_aware"]
+    print(f"[india]   with price-aware forecast: waste change {-pa['waste_reduction_pct']:+.1f}%, "
+          f"service {pa['service_change_pts']:+.2f} pts (waste {pa['baseline']['waste_pct_of_received']}% -> "
+          f"{pa['unwaste']['waste_pct_of_received']}%)")
     return res
 
 
@@ -273,7 +290,7 @@ def generate_mandi(folder: Path, seed: int = 12) -> None:
     days = pd.date_range("2023-01-01", "2024-12-31", freq="D")
     folder.mkdir(parents=True, exist_ok=True)
     for name, (base, swing, spikes) in _MANDI.items():
-        price = base * (1 + swing * np.sin(2 * np.pi * (days.dayofyear.to_numpy() - 60) / 365))
+        price = base * (1 + swing * np.sin(2 * np.pi * (days.day_of_year.to_numpy() - 60) / 365))
         mult = np.ones(len(days))
         for a, b, k in spikes:  # smooth ramp up and down around each spike
             mid, half = pd.Timestamp(a) + (pd.Timestamp(b) - pd.Timestamp(a)) / 2, (pd.Timestamp(b) - pd.Timestamp(a)) / 2
