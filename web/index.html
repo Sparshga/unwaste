@@ -60,6 +60,7 @@
   <button data-tab="actions" class="on">Store actions</button>
   <button data-tab="score">Replay scoreboard</button>
   <button data-tab="truth">Demand-truth test</button>
+  <button data-tab="proof">Proof tests</button>
 </nav>
 <main>
   <!-- ======================= ACTIONS ======================= -->
@@ -94,6 +95,10 @@
     <h2>One real stockout day: sales seen vs demand recovered</h2>
     <div class="card" id="dchart"></div>
   </section>
+  <!-- ======================= PROOF (Phase 2) ======================= -->
+  <section id="tab-proof" class="hide">
+    <div id="proof"><p class="muted">No proof results yet: run <code>python -m unwaste.proof</code></p></div>
+  </section>
 </main>
 
 <script>
@@ -103,7 +108,7 @@ const $ = id => document.getElementById(id);
 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
-  ['actions','score','truth'].forEach(t => $('tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
+  ['actions','score','truth','proof'].forEach(t => $('tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
 });
 
 function svgBars(values, labels, opts = {}) {
@@ -231,6 +236,37 @@ async function load(name) {
       svgLines([{name: 'Sales recorded', data: ex.observed, color: '#9AA3B5'}, {name: 'Demand after correction', data: ex.corrected, color: '#2B59F3'}],
                {shade: ex.stockout, xlabels: ex.observed.map((_, i) => i % 3 === 0 ? i + ':00' : '')});
   }
+  // ---------------- proof tests (Phase 2, optional) ----------------
+  let proof = null;
+  try { proof = await load('proof'); } catch (e) { return; }
+  const w = r => `${r.next_day}%`, ww = r => `${r.week}%`;
+  let h = `<h2>1 · Is LightGBM better than simple forecasts?</h2>
+    <p class="muted">Error (WAPE) on the 4-week test window. Lower is better.</p>
+    <table><tr><th>Forecast</th><th>Next day</th><th>Whole next week</th></tr>${proof.baselines.rows.map(r =>
+      `<tr class="${r.model.includes('ours') ? 'win' : ''}"><td>${r.model}</td><td>${w(r)}</td><td>${ww(r)}</td></tr>`).join('')}</table>`;
+  const ns = proof.new_stores;
+  h += `<h2>2 · New stores: only ${ns.history_days} days of history, never in training</h2>
+    <div class="row">
+      <div class="card"><div class="kpi">${ns.new_store_wape.week}%</div><div class="lbl">error on ${ns.new_stores} "new" stores (14 days of data)</div></div>
+      <div class="card"><div class="kpi">${ns.same_stores_with_full_history.week}%</div><div class="lbl">same stores with full history</div></div>
+      <div class="card"><div class="kpi">${ns.moving_average_on_new.week}%</div><div class="lbl">7-day average on the new stores</div></div>
+    </div>`;
+  if (proof.unseen_cities) {
+    const uc = proof.unseen_cities;
+    h += `<h2>3 · Unseen cities: trained on ${uc.train_cities} cities, tested on ${uc.test_cities.length} never seen</h2>
+    <div class="row">
+      <div class="card"><div class="kpi">${uc.unseen_city_wape.week}%</div><div class="lbl">error in unseen cities</div></div>
+      <div class="card"><div class="kpi">${uc.same_cities_if_seen.week}%</div><div class="lbl">same cities if the model had seen them</div></div>
+      <div class="card"><div class="kpi">${uc.moving_average.week}%</div><div class="lbl">7-day average in those cities</div></div>
+    </div>`;
+  }
+  h += `<h2>4 · Robustness: change one assumption, rerun the replay on the same demand</h2>
+    <table><tr><th>Case</th><th>Waste baseline → Unwaste</th><th>Waste cut</th><th>Service baseline → Unwaste</th><th>Net margin change</th><th>After lost-sale cost</th><th>Breaches</th></tr>${
+    proof.robustness.map(r => `<tr><td>${r.case}</td><td>${r.waste_baseline_pct}% → ${r.waste_unwaste_pct}%</td><td>−${r.waste_reduction_pct}%</td>
+      <td>${r.service_baseline_pct}% → ${r.service_unwaste_pct}%</td><td>${r.net_gain_rs >= 0 ? '+' : ''}${rs(r.net_gain_rs)}</td>
+      <td>${r.net_after_lost_gain_rs >= 0 ? '+' : ''}${rs(r.net_after_lost_gain_rs)}</td><td>${r.breaches}</td></tr>`).join('')}</table>
+    <p class="muted">Data: ${proof.source}. Runtime ${proof.runtime_s}s.</p>`;
+  $('proof').innerHTML = h;
 })();
 </script>
 </body>

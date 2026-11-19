@@ -15,6 +15,8 @@ Owner : Ujjwal.
 """
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 
@@ -38,10 +40,13 @@ def exo_matrices(daily: pd.DataFrame) -> dict:
 
 def _origin_features(Y: np.ndarray, o: int) -> dict:
     """Features known on the night of day o (uses days <= o only)."""
-    def mean_last(k):
-        return Y[:, max(0, o - k + 1):o + 1].mean(axis=1)
-    return {"last": Y[:, o], "m7": mean_last(7), "m14": mean_last(14), "m28": mean_last(28),
-            "sd14": Y[:, max(0, o - 13):o + 1].std(axis=1)}
+    # nan-aware: a "new store" has NaN before it opened, so averages use only the days it has
+    with np.errstate(all="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        def mean_last(k):
+            return np.nanmean(Y[:, max(0, o - k + 1):o + 1], axis=1)
+        return {"last": Y[:, o], "m7": mean_last(7), "m14": mean_last(14), "m28": mean_last(28),
+                "sd14": np.nanstd(Y[:, max(0, o - 13):o + 1], axis=1)}
 
 
 def _build_rows(Y, exo, dates, origins, H, series_codes):
@@ -54,8 +59,12 @@ def _build_rows(Y, exo, dates, origins, H, series_codes):
             tt = min(t, T - 1)                      # beyond the data: reuse last known exo
             dow = (dates[o].day_of_week + h) % 7
             same_dow = [Y[:, t - 7 * k] for k in (1, 2, 3, 4) if 0 <= t - 7 * k <= o]
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                sd = np.nanmean(same_dow, axis=0) if same_dow else base["m7"]
+            sd = np.where(np.isnan(sd), base["m7"], sd)
             blk = {**base, "h": np.full(S, h), "dow": np.full(S, dow),
-                   "same_dow": np.mean(same_dow, axis=0) if same_dow else base["m7"],
+                   "same_dow": sd,
                    "discount": exo["discount"][:, tt], "holiday": exo["holiday"][:, tt],
                    "activity": exo["activity"][:, tt],
                    "store": series_codes[0], "product": series_codes[1],
@@ -69,8 +78,10 @@ FEATS = ["last", "m7", "m14", "m28", "sd14", "h", "dow", "same_dow", "discount",
          "activity", "store", "product"]
 
 
-def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "") -> dict:
-    """Train on the first (T - test_days) days, return forecasts for every origin in the test."""
+def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "",
+                 train_mask: np.ndarray | None = None, quiet: bool = False) -> dict:
+    """Train on the first (T - test_days) days, return forecasts for every origin in the test.
+    train_mask (bool per series): Phase 2 tests train on some series and forecast the others."""
     S, T = Y.shape
     H = cfg.horizon_days
     _, dates = to_matrix(daily, "sales")
@@ -82,6 +93,9 @@ def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "
     train_origins = [o for o in range(14, train_end) if o + 1 <= train_end]
     train = _build_rows(Y, exo, dates, train_origins, H, codes)
     train = train[train["origin"] + train["h"] <= train_end]
+    train = train.dropna(subset=["target"])
+    if train_mask is not None:
+        train = train[train_mask[train["series"].to_numpy()]]
     test_origins = list(range(train_end, T))
     test = _build_rows(Y, exo, dates, test_origins, H, codes)
 
@@ -104,8 +118,9 @@ def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "
     wape = np.abs(p50 - sel["target"]).sum() / max(sel["target"].sum(), 1e-9)
     inside = ((sel["target"] >= out[0.1][sel["series"], sel["origin"], 0]) &
               (sel["target"] <= out[0.9][sel["series"], sel["origin"], 0])).mean()
-    print(f"[forecast{label}] train rows {len(train):,}; next-day WAPE {wape:.0%}; "
-          f"actuals inside P10-P90: {inside:.0%} (ideal ~80%)")
+    if not quiet:
+        print(f"[forecast{label}] train rows {len(train):,}; next-day WAPE {wape:.0%}; "
+              f"actuals inside P10-P90: {inside:.0%} (ideal ~80%)")
     out["train_end"] = train_end
     out["metrics"] = {"wape_h1": float(wape), "coverage_p10_p90": float(inside)}
     return out

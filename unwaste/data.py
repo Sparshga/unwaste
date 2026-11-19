@@ -81,8 +81,33 @@ def load_frn(cfg: Config) -> pd.DataFrame:
     return df
 
 
+def load_frn_multi(cfg: Config, stores_per_city: int = 4, products_per_city: int = 20) -> pd.DataFrame:
+    """Phase 2: a few top stores from EVERY city (for the unseen-cities test).
+    Reads only the chosen stores from disk (pyarrow filter), so memory stays small."""
+    files = sorted(glob.glob(str(cfg.data_dir / "**" / "*.parquet"), recursive=True))
+    if not files:
+        raise FileNotFoundError(f"No parquet files under {cfg.data_dir}.")
+    ids = pd.concat([pd.read_parquet(f, columns=[COL["city"], COL["store"], COL["product"], COL["sale"]])
+                     for f in files])
+    by_store = ids.groupby([COL["city"], COL["store"]], as_index=False)[COL["sale"]].sum()
+    keep = by_store.sort_values(COL["sale"], ascending=False).groupby(COL["city"]).head(stores_per_city)
+    stores = keep[COL["store"]].astype(int).tolist()
+    sub = ids.merge(keep[[COL["city"], COL["store"]]], on=[COL["city"], COL["store"]])
+    prods = (sub.groupby([COL["city"], COL["product"]], as_index=False)[COL["sale"]].sum()
+             .sort_values(COL["sale"], ascending=False).groupby(COL["city"]).head(products_per_city))
+    parts = []
+    for f in files:
+        d = pd.read_parquet(f, filters=[(COL["store"], "in", stores)])
+        d = d.merge(prods[[COL["city"], COL["product"]]], on=[COL["city"], COL["product"]])
+        parts.append(d)
+    df = pd.concat(parts, ignore_index=True).drop_duplicates(subset=[COL["store"], COL["product"], COL["date"]])
+    print(f"[data] FreshRetailNet-50K multi-city: {df[COL['city']].nunique()} cities, "
+          f"{len(stores)} stores, {len(df):,} rows")
+    return df
+
+
 # ----------------------------------------------------------------------------- synthetic
-def make_synthetic(cfg: Config, n_days: int = 90) -> pd.DataFrame:
+def make_synthetic(cfg: Config, n_days: int = 90, n_cities: int = 1) -> pd.DataFrame:
     """Stand-in data with the SAME columns as FreshRetailNet-50K (for dev/testing only)."""
     rng = np.random.default_rng(cfg.seed)
     S, P = cfg.max_stores, cfg.max_products
@@ -116,7 +141,7 @@ def make_synthetic(cfg: Config, n_days: int = 90) -> pd.DataFrame:
                         oos[h] = 1
                 scale = 0.1  # mimic anonymised, scaled sales
                 rows.append({
-                    COL["city"]: 0, COL["store"]: s, COL["product"]: p, COL["cat"]: int(cat[p]),
+                    COL["city"]: s % n_cities, COL["store"]: s, COL["product"]: p, COL["cat"]: int(cat[p]),
                     COL["date"]: d.strftime("%Y-%m-%d"), COL["sale"]: float(sold.sum() * scale),
                     COL["hours_sale"]: (sold * scale).tolist(), COL["hours_stock"]: oos.tolist(),
                     COL["discount"]: float(disc), COL["holiday"]: hol, COL["activity"]: int(disc < 1),
@@ -127,13 +152,14 @@ def make_synthetic(cfg: Config, n_days: int = 90) -> pd.DataFrame:
 
 
 # ----------------------------------------------------------------------------- build panel
-def build_panel(cfg: Config) -> Panel:
-    raw = make_synthetic(cfg) if cfg.use_synthetic else load_frn(cfg)
+def build_panel(cfg: Config, raw: pd.DataFrame | None = None) -> Panel:
+    if raw is None:
+        raw = make_synthetic(cfg) if cfg.use_synthetic else load_frn(cfg)
+        # keep the top-selling products across the chosen stores
+        top = raw.groupby(COL["product"])[COL["sale"]].sum().nlargest(cfg.max_products).index
+        raw = raw[raw[COL["product"]].isin(top)].copy()
     source = "SYNTHETIC" if cfg.use_synthetic else "FreshRetailNet-50K"
-
-    # keep the top-selling products across the chosen stores
-    top = raw.groupby(COL["product"])[COL["sale"]].sum().nlargest(cfg.max_products).index
-    raw = raw[raw[COL["product"]].isin(top)].copy()
+    raw = raw.copy()
     raw["dt"] = pd.to_datetime(raw[COL["date"]])
     raw = raw.sort_values([COL["store"], COL["product"], "dt"]).reset_index(drop=True)
 
@@ -153,6 +179,7 @@ def build_panel(cfg: Config) -> Panel:
     hs = hs * k
 
     daily = pd.DataFrame({
+        "city_id": raw[COL["city"]].to_numpy(),
         "store_id": raw[COL["store"]].to_numpy(),
         "product_id": raw[COL["product"]].to_numpy(),
         "dt": raw["dt"].to_numpy(),
@@ -165,7 +192,8 @@ def build_panel(cfg: Config) -> Panel:
     daily["series_id"] = daily.groupby(["store_id", "product_id"]).ngroup()
 
     # per-series facts the data doesn't carry: price and shelf life (deterministic)
-    meta = daily.groupby("series_id").agg(store_id=("store_id", "first"),
+    meta = daily.groupby("series_id").agg(city_id=("city_id", "first"),
+                                          store_id=("store_id", "first"),
                                           product_id=("product_id", "first"),
                                           cat=("cat", "first"),
                                           mean_sales=("sales", "mean")).reset_index()

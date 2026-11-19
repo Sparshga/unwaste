@@ -65,3 +65,12 @@ def test_newsvendor_orders_roughly_window_demand_when_empty():
     q = newsvendor_order([], *[np.full(7, v) for v in (8.0, 10.0, 12.0)], arrival=1,
                          sellable_days=5, price=50.0, cfg=cfg, rng=rng)
     assert 25 <= q <= 55                                 # ~3 days of cover, not the whole week
+
+
+def test_forecast_baselines_and_errors():
+    from unwaste.proof import baseline_forecasts, forecast_errors
+    Y = np.tile(np.array([10.0, 12, 14, 10, 12, 14, 20] * 4), (2, 1))   # weekly pattern, 28 days
+    B = baseline_forecasts(Y, train_end=20, H=7)
+    sn = forecast_errors(B["Same weekday last week"], Y, 20, 7)
+    assert sn["next_day"] == 0.0 and sn["week"] == 0.0                   # perfect on a pure weekly pattern
+    assert forecast_errors(B["Moving average (7 days)"], Y, 20, 7)["week"] > 0
