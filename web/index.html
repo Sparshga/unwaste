@@ -169,51 +169,32 @@ function pairTable(r) {
 }
 function signed(v, unit) { return (v >= 0 ? '+' : '−') + Math.abs(v) + unit; }
 function renderIndia(ind) {
-  const wf = ind.weather_in_forecast;
   const src = ind.inputs || {};
-  const tag = k => src[k] === 'real' ? '<span class="badge good">real data</span>'
-                 : src[k] === 'generated' ? '<span class="badge warn">generated stand-in</span>' : '';
-  const bucketRows = arr => arr.map(b => `<tr><td>${b.bucket}</td><td>${signed(b.demand_vs_average_pct, '%')}</td><td>${fmt(b.days)}</td></tr>`).join('');
-  let h = `<h2>1 · Weather in the forecast</h2>
-    <div class="row">
-      <div class="card"><div class="kpi">${wf.wape_without_weather}%</div><div class="lbl">next-day error without weather</div></div>
-      <div class="card"><div class="kpi ${wf.wape_with_weather < wf.wape_without_weather ? 'good' : ''}">${wf.wape_with_weather}%</div><div class="lbl">with rain, temperature, humidity, wind</div></div>
-    </div>
-    ${wf.wape_heavy_rain_with !== undefined ? `<p class="muted" style="margin-top:10px">Rare days hide in the average. Error on rainy store-days only:</p>
-    <table><tr><th>Days</th><th>Without weather</th><th>With weather</th><th>Store-days</th></tr>
-      <tr><td>Rainy (&gt;1 mm)</td><td>${wf.wape_rainy_without}%</td><td><b>${wf.wape_rainy_with}%</b></td><td>${fmt(wf.n_rainy_store_days)}</td></tr>
-      <tr><td>Heavy rain (&gt;10 mm)</td><td>${wf.wape_heavy_rain_without}%</td><td><b>${wf.wape_heavy_rain_with}%</b></td><td>${fmt(wf.n_heavy_rain_store_days)}</td></tr></table>` : ''}
-    <div class="row" style="margin-top:14px">
-      <div style="flex:1;min-width:300px"><table><tr><th>Rain that day</th><th>Demand vs item average</th><th>Store-item-days</th></tr>${bucketRows(wf.by_rain)}</table></div>
-      <div style="flex:1;min-width:300px"><table><tr><th>Temperature</th><th>Demand vs item average</th><th>Store-item-days</th></tr>${bucketRows(wf.by_temp)}</table></div>
-    </div>`;
+  const tag = k => src[k] === 'real' ? '<span class="badge good">real data</span>' : '<span class="badge warn">generated stand-in</span>';
+  const heavy = (ind.weather_in_forecast.by_rain || []).find(b => b.bucket.startsWith('Heavy'));
+  const kpi = (v, l, good) => `<div class="card"><div class="kpi ${good ? 'good' : ''}">${v}</div><div class="lbl">${l}</div></div>`;
+  let h = `<h2>1 · Weather changes demand</h2>
+    <div class="row">${heavy ? kpi(signed(heavy.demand_vs_average_pct, '%'), 'more demand on heavy-rain days (vs the item’s normal)', true) : ''}
+      ${kpi('4', 'weather inputs in the forecast: rain, temperature, humidity, wind')}</div>`;
   const iw = ind.indian_weather;
   if (iw) {
-    h += `<h2>2 · What if these stores had Delhi-NCR weather? (${iw.window[0]} → ${iw.window[1]}) ${tag('weather')}</h2>
-      <p class="muted">${src.weather === 'generated' ? 'Generated Delhi-like weather (stand-in, shaped on Delhi monthly climate)' : 'Real weather'} for the same dates, ${iw.place}: avg ${iw.avg_temp_c}°C, ${iw.hot_days_35c} days ≥35°C, ${iw.total_rain_mm} mm rain, ${iw.heavy_rain_days} heavy-rain days. The weather-aware model turns this into a demand shift of ${signed(iw.demand_shift_pct, '%')}; then both policies are replayed on it.</p>
-      <div class="row">
-        <div class="card"><b>Demand index (100 = demand under the original weather)</b>${svgLines([{name: 'Demand index', data: iw.daily.demand_index, color: '#2B59F3'}],
-                                     {xlabels: iw.daily.dates.map((d, i) => i % 7 === 0 ? d.slice(5) : '')})}</div>
-        <div class="card"><b>Delhi-NCR weather, same dates</b>${svgLines([{name: 'Temperature °C', data: iw.daily.temp, color: '#D64545'},
-                                     {name: 'Rain mm', data: iw.daily.rain, color: '#9AA3B5'}],
-                                     {xlabels: iw.daily.dates.map((d, i) => i % 7 === 0 ? d.slice(5) : '')})}</div>
-      </div>
-      <div style="margin-top:12px">${pairTable(iw)}</div>`;
+    h += `<h2>2 · Replay on Delhi-NCR weather ${tag('weather')}</h2>
+      <p class="muted">Gurugram, ${iw.window[0]} → ${iw.window[1]}: avg ${iw.avg_temp_c}°C, ${iw.hot_days_35c} days ≥35°C, monsoon at the end.</p>
+      <div class="row">${kpi(iw.baseline.waste_pct_of_received + '% → ' + iw.unwaste.waste_pct_of_received + '%', 'waste: today’s ordering → Unwaste', true)}
+        ${kpi(iw.baseline.service_level_pct + '% → ' + iw.unwaste.service_level_pct + '%', 'service level', true)}
+        ${kpi(fmt(iw.unwaste.shelf_life_breaches), 'shelf-life breaches')}</div>`;
   }
-  const ag = ind.agmarknet;
-  if (ag) {
+  const ag = ind.agmarknet, pa = ag && ag.price_aware;
+  if (pa) {
     const s = ag.series[ag.commodity];
-    h += `<h2>3 · Indian mandi price shock: ${ag.commodity}, ${src.mandi === 'generated' ? 'Delhi mandi' : ag.market} ${tag('mandi')}</h2>
-      <p class="muted">Worst 4-week window: ${ag.shock_window[0]} → ${ag.shock_window[1]}, price averaged ${ag.avg_price_vs_normal}× normal (peak ${ag.peak_price_vs_normal}×).
-      With a price elasticity of ${ag.elasticity} (stated assumption), demand moves between ${signed(ag.demand_swing_pct[0], '%')} and ${signed(ag.demand_swing_pct[1], '%')}. Both policies are replayed through that swing.</p>
-      <div class="card">${svgLines(Object.entries(ag.series).map(([k, v], i) => ({name: k + ' ₹/quintal (weekly)', data: v.price, color: ['#2B59F3', '#D64545', '#9AA3B5'][i % 3]})),
-                                   {xlabels: s.weeks.map((d, i) => i % 13 === 0 ? d.slice(0, 7) : '')})}</div>
-      <div class="row" style="margin-top:12px">
-        <div style="flex:1;min-width:320px"><b>A · Forecast ignores the mandi price</b>${pairTable(ag)}</div>
-        ${ag.price_aware ? `<div style="flex:1;min-width:320px"><b>B · Forecast reads today's mandi price</b> <span class="muted">(assumes elasticity ${ag.forecast_elasticity}, true is ${ag.elasticity})</span>${pairTable(ag.price_aware)}</div>` : ''}
-      </div>`;
+    h += `<h2>3 · Mandi price spike (${ag.commodity}, ${ag.avg_price_vs_normal}× normal price) ${tag('mandi')}</h2>
+      <p class="muted">Every store’s demand drops. Unwaste reads today’s mandi price before ordering.</p>
+      <div class="row">${kpi(pa.baseline.waste_pct_of_received + '% → ' + pa.unwaste.waste_pct_of_received + '%', 'waste: today’s ordering → Unwaste', true)}
+        ${kpi(pa.baseline.service_level_pct + '% → ' + pa.unwaste.service_level_pct + '%', 'service level', true)}</div>
+      <div class="card" style="margin-top:12px"><b>${ag.commodity} price, ₹/quintal (weekly)</b>${svgLines([{name: ag.commodity, data: s.price, color: '#D64545'}],
+        {xlabels: s.weeks.map((d, i) => i % 13 === 0 ? d.slice(0, 7) : '')})}</div>`;
   }
-  h += `<p class="muted">Data: ${ind.source}${iw ? (src.weather === 'generated' ? ' + generated Delhi weather' : ' + Open-Meteo (India, real)') : ''}${ag ? (src.mandi === 'generated' ? ' + generated mandi prices (Agmarknet format)' : ' + Agmarknet (India, real)') : ''}. Runtime ${ind.runtime_s}s.</p>`;
+  h += `<p class="muted">Store demand: FreshRetailNet-50K (real). Weather: ${src.weather === 'real' ? 'Open-Meteo, real' : 'generated'}. Mandi prices: ${src.mandi === 'real' ? 'Agmarknet, real' : 'generated in Agmarknet format'}.</p>`;
   $('india').innerHTML = h;
 }
 
