@@ -578,12 +578,12 @@ function renderOrder(p) {
     <div class="hero">
       <div class="card"><div class="lbl">Units to order tonight</div><div class="kpi">${fmt(units)}</div><div class="sub">without Unwaste: ${fmt(usual)} · ${ordered.length} items</div>
         <div class="metric">Each item ordered to last until its next delivery</div></div>
-      <div class="card"><div class="lbl">Order value (at cost)</div><div class="kpi">${rs(value)}</div><div class="sub">${fmt(skipped.length)} item${skipped.length === 1 ? '' : 's'} need no order tonight</div>
+      <div class="card"><div class="lbl">Order value (at cost)</div><div class="kpi">${rs(value)}</div><div class="sub">${skipped.length ? `${fmt(skipped.length)} item${skipped.length === 1 ? '' : 's'} skipped: enough stock already` : 'Every item gets an order tonight'}</div>
         <div class="metric">Buying price is about 70% of selling price</div></div>
       <div class="card good"><div class="lbl">Extra money with Unwaste</div><div class="kpi">${rs(rows.reduce((t, r) => t + (r.gain_day || 0), 0))} a day</div>
         <div class="sub">${rows.filter(r => (r.gain_day || 0) > 0.5).length} items earn more, ${rows.filter(r => (r.gain_day || 0) < -0.5).length} earn less</div>
         <div class="metric">Average per day when both ways of ordering were tried on the same 3½ months of past customers</div></div>
-      <div class="card good"><div class="lbl">Waste avoided by this order</div><div class="kpi">${fmt(Math.max(0, Math.round(wH - wU)))} units</div>
+      <div class="card good"><div class="lbl">Waste avoided by this order</div><div class="kpi">${fmt(Math.max(0, Math.round(wH) - Math.round(wU)))} units</div>
         <div class="sub">${rs(wRs)} saved · likely to expire: ${fmt(Math.round(wU))} instead of ${fmt(Math.round(wH))}</div>
         <div class="metric">Units from this delivery likely to expire unsold, compared with ordering without Unwaste</div></div>
     </div>
