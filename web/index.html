@@ -22,6 +22,7 @@
   nav{ display:flex; gap:4px; padding:0 28px; background:#fff; border-bottom:1px solid var(--line) }
   nav button{ border:0; background:none; padding:14px 16px; font:inherit; font-weight:600; color:var(--muted); cursor:pointer; border-bottom:3px solid transparent }
   nav button.on{ color:var(--ink); border-bottom-color:var(--blue) }
+  body:not(.review) nav .rev{ display:none }
   main{ padding:24px 28px; max-width:1280px; margin:0 auto }
   .row{ display:flex; gap:16px; flex-wrap:wrap }
   .card{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 20px; flex:1; min-width:220px }
@@ -88,13 +89,13 @@
   <button data-tab="live" class="on">Dynamic demand</button>
   <button data-tab="order">Tonight's order</button>
   <button data-tab="iact">India store actions</button>
-  <button data-tab="imain">India results</button>
-  <span class="navsep">Evidence for reviewers:</span>
-  <button data-tab="actions">Store actions</button>
-  <button data-tab="score">Replay scoreboard</button>
-  <button data-tab="truth">Demand-truth test</button>
-  <button data-tab="proof">Proof tests</button>
-  <button data-tab="india">Stress tests</button>
+  <button class="rev" data-tab="imain">India results</button>
+  <span class="navsep rev">Evidence for reviewers:</span>
+  <button class="rev" data-tab="actions">Store actions</button>
+  <button class="rev" data-tab="score">Replay scoreboard</button>
+  <button class="rev" data-tab="truth">Demand-truth test</button>
+  <button class="rev" data-tab="proof">Proof tests</button>
+  <button class="rev" data-tab="india">Stress tests</button>
 </nav>
 <main>
   <!-- ======================= LIVE ======================= -->
@@ -196,6 +197,7 @@ const fmt = n => ok(n) ? n.toLocaleString('en-IN') : '—';
 const rs = n => ok(n) ? (n < 0 ? '−₹' : '₹') + fmt(Math.abs(Math.round(n))) : '—';
 const $ = id => document.getElementById(id);
 
+if (/[?&]review\b/.test(location.search)) document.body.classList.add('review');
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
   ['live','order','iact','imain','actions','score','truth','proof','india'].forEach(t => $('tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
