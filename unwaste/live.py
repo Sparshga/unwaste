@@ -220,10 +220,11 @@ def predict(inputs: dict) -> dict:
     orders, habit = np.zeros(len(meta), int), np.zeros(len(meta), int)
     for s in range(len(meta)):
         cur = [b for b in stock[s] if b.qty > 0]
+        cs = replace(cfg, review_period_days=int(meta["review_days"].iloc[s])) if "review_days" in meta.columns else cfg
         orders[s] = newsvendor_order(cur, F[0.1][s], F[0.5][s], F[0.9][s], t + 1, int(sell_days[s]),
-                                     float(price[s]), cfg, rng)
+                                     float(price[s]), cs, rng)
         pos = sum(b.qty for b in cur if b.sellby >= t + 1)
-        habit[s] = baseline_order(st["S_tail"][s, -7:], pos, cfg)          # daily habit: recent sales + 15%
+        habit[s] = baseline_order(st["S_tail"][s, -7:], pos, cs)            # habit: recent sales + 15%, to the next delivery
     on_hand = np.array([sum(b.qty for b in stock[s] if b.qty > 0) for s in range(len(meta))])
 
     # KPI: expected waste from tonight's order and lost sales tomorrow, Unwaste vs habit (same demand paths)

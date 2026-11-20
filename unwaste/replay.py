@@ -13,7 +13,7 @@ Step 8 · Decision replay: baseline vs Unwaste on the SAME demand.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pandas as pd
@@ -97,6 +97,8 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
     unit_cost = cfg.cost_ratio * price
     sell_days = meta["sellable_days"].to_numpy()
     R, L = cfg.review_period_days, cfg.lead_time_days
+    Rs = meta["review_days"].to_numpy().astype(int) if "review_days" in meta.columns else np.full(nS, R)
+    cfg_r = {int(r): replace(cfg, review_period_days=int(r)) for r in set(Rs.tolist())}
     by_product = defaultdict(list)
     for s, p in enumerate(meta["product_id"].to_numpy()):
         by_product[p].append(s)
@@ -109,7 +111,7 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
 
     # identical starting stock for every policy: ~R days of average demand, fresh
     for s in range(nS):
-        q = int(round(D[s, max(0, t0 - 14):t0].mean() * R))
+        q = int(round(D[s, max(0, t0 - 14):t0].mean() * Rs[s]))
         stock[s].append(Batch(q, t0 + sell_days[s] - 1, t0, f"{s}-init"))
         led.received += q
         led.purchase += q * unit_cost[s]
@@ -180,17 +182,18 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
 
         # ---------------- ordering ----------------
         for s in range(nS):
-            if (t - s) % R != 0:
+            if (t - s) % Rs[s] != 0:
                 continue
+            cs = cfg_r[int(Rs[s])]
             arrival = t + L
             position = sum(b.qty for b in stock[s] if b.sellby >= arrival)
             if policy.use_forecast and F is not None:
                 h0 = arrival - t - 1
                 cur = [Batch(b.qty, b.sellby, b.arrival) for b in stock[s] if b.qty > 0]
                 q = newsvendor_order(cur, F[0.1][s, t, h0:], F[0.5][s, t, h0:], F[0.9][s, t, h0:],
-                                     arrival, int(sell_days[s]), float(price[s]), cfg, rng)
+                                     arrival, int(sell_days[s]), float(price[s]), cs, rng)
             else:
-                q = baseline_order(S_obs[s, max(0, t - 6):t + 1], position, cfg)
+                q = baseline_order(S_obs[s, max(0, t - 6):t + 1], position, cs)
             if q > 0:
                 stock[s].append(Batch(q, arrival + sell_days[s] - 1, arrival, f"{s}-d{arrival}"))
                 led.received += q

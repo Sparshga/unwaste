@@ -43,7 +43,10 @@ def load_dataset(path: Path = DATA_DIR / "unwaste_india.csv") -> pd.DataFrame:
     return df
 
 
-def panel(df: pd.DataFrame, cfg):
+DAILY_MAX_SHELF_LIFE = 4
+
+
+def panel(df: pd.DataFrame, cfg, delivery_days: int = 3):
     """Daily table + 24-hour sales and stockout flags -> the same Panel FreshRetailNet uses."""
     d = df.rename(columns={"date": "dt"}).copy()
     d["store_id"], d["product_id"] = d["store_name"], d["item"]       # readable names everywhere
@@ -56,6 +59,7 @@ def panel(df: pd.DataFrame, cfg):
     meta["city_id"] = 0
     meta["min_remaining"] = np.ceil(0.30 * meta["shelf_life"]).astype(int)       # FSSAI: 30% left at sale
     meta["sellable_days"] = (meta["shelf_life"] - meta["min_remaining"]).clip(lower=1)
+    meta["review_days"] = np.where(meta["shelf_life"] <= DAILY_MAX_SHELF_LIFE, 1, delivery_days)
     pnl = Panel(daily=d, hourly_sales=hr["hs"].astype(float), hourly_oos=hr["oos"].astype(bool), meta=meta,
                 source="Unwaste-India")
     # step 1, exactly as on FreshRetailNet: a model trained only on in-stock hours fills the empty ones
@@ -74,11 +78,11 @@ def _wape(P, Y, te, mask=None):
     return round(100 * err / max(tot, 1e-9), 1)
 
 
-def run(fast: bool = False) -> dict:
+def run(fast: bool = False, delivery_days: int = 3) -> dict:
     t0 = time.time()
     df = load_dataset()
     cfg0 = default_config(open_hours=OPEN, n_estimators=120 if fast else 200)
-    d, meta, pnl, corrected = panel(df, cfg0)
+    d, meta, pnl, corrected = panel(df, cfg0, delivery_days)
     Y, dates = to_matrix(d, "demand")
     S_obs, _ = to_matrix(d, "sales")
     Y_true, _ = to_matrix(d, "demand_true")
@@ -197,7 +201,10 @@ def run(fast: bool = False) -> dict:
                        "weather_days": {k: int(v) for k, v in wsrc.items()},
                        "categories": df.groupby("category").item.nunique().to_dict()},
            "fill_in": fill, "forecast": fc, "replay": rep, "headline": headline, "chart": chart, "dial": dial,
-           "features": F["features"], "backends": backend_names(), "runtime_s": 0}
+           "features": F["features"], "backends": backend_names(), "runtime_s": 0,
+           "replenishment": {"daily_max_shelf_life": DAILY_MAX_SHELF_LIFE, "every_days": delivery_days,
+                             "daily_items": int((meta.drop_duplicates("product_id")["review_days"] == 1).sum()),
+                             "periodic_items": int((meta.drop_duplicates("product_id")["review_days"] > 1).sum())}}
     # store actions for the last 7 nights, readable
     acts = []
     for a in ledgers["unwaste"].actions:
@@ -246,7 +253,10 @@ def run(fast: bool = False) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Train and test on Unwaste-India; save the live model")
     ap.add_argument("--fast", action="store_true", help="fewer trees, fewer training days (quick check)")
-    run(ap.parse_args().fast)
+    ap.add_argument("--delivery-days", type=int, default=3,
+                    help=f"delivery cycle for items with shelf life above {DAILY_MAX_SHELF_LIFE} days (shorter-life items: daily)")
+    a = ap.parse_args()
+    run(a.fast, a.delivery_days)
 
 
 if __name__ == "__main__":

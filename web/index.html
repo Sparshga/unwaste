@@ -307,7 +307,8 @@ function renderIMain(m) {
   let h = `<h2>Unwaste-India: trained ${ds.start} → ${ds.train_end}, tested on the next ${ds.test_days} days</h2>
     <p class="muted">${fmt(ds.rows)} rows · ${ds.stores} Delhi-NCR stores × ${ds.items} perishable items × ${ds.days} days.
     Real: weather (Open-Meteo on ${fmt(real)} of ${fmt(ds.days)} days) and the festival calendar. Generated: demand, prices, promotions, stockouts.
-    The replay uses true demand as reality; the policies only see sales.</p>
+    The replay uses true demand as reality; the policies only see sales.
+    ${m.replenishment ? `<br><b>Replenishment:</b> daily for items with shelf life ≤ ${m.replenishment.daily_max_shelf_life} days (${m.replenishment.daily_items} items), every ${m.replenishment.every_days} days for the rest (${m.replenishment.periodic_items} items).` : ''}</p>
     <div class="row">${kpi(b.waste_pct_of_received + '% → ' + u.waste_pct_of_received + '%', 'waste: ordering by habit → Unwaste', u.waste_pct_of_received <= b.waste_pct_of_received ? 'good' : '')}
       ${kpi(b.service_level_pct + '% → ' + u.service_level_pct + '%', 'service level (demand served)', 'good')}
       ${kpi(rs(m.headline.net_after_lost_gain_rs), 'net margin gain after lost-sale cost', m.headline.net_after_lost_gain_rs >= 0 ? 'good' : 'bad')}</div>
