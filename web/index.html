@@ -22,7 +22,7 @@
   nav{ display:flex; gap:4px; padding:0 28px; background:#fff; border-bottom:1px solid var(--line) }
   nav button{ border:0; background:none; padding:14px 16px; font:inherit; font-weight:600; color:var(--muted); cursor:pointer; border-bottom:3px solid transparent }
   nav button.on{ color:var(--ink); border-bottom-color:var(--blue) }
-  body:not(.review) nav .rev{ display:none }
+  body:not(.review) .rev{ display:none }
   main{ padding:24px 28px; max-width:1280px; margin:0 auto }
   .row{ display:flex; gap:16px; flex-wrap:wrap }
   .card{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 20px; flex:1; min-width:220px }
@@ -80,18 +80,18 @@
 </head>
 <body>
 <header>
-  <h1><span class="sticker">Unwaste</span> &nbsp;Batch expiry risk · manager screen</h1>
-  <span class="badge" id="src">loading…</span>
-  <span class="badge" id="eng"></span>
-  <span class="badge" id="win"></span>
+  <h1><span class="sticker">Unwaste</span> &nbsp;Store manager screen</h1>
+  <span class="badge rev" id="src">loading…</span>
+  <span class="badge rev" id="eng"></span>
+  <span class="badge rev" id="win"></span>
 </header>
 <nav>
   <button data-tab="live" class="on">Dynamic demand</button>
   <button data-tab="order">Tonight's order</button>
-  <button data-tab="iact">India store actions</button>
+  <button data-tab="iact">Store actions</button>
   <button class="rev" data-tab="imain">India results</button>
   <span class="navsep rev">Evidence for reviewers:</span>
-  <button class="rev" data-tab="actions">Store actions</button>
+  <button class="rev" data-tab="actions">FreshRetailNet actions</button>
   <button class="rev" data-tab="score">Replay scoreboard</button>
   <button class="rev" data-tab="truth">Demand-truth test</button>
   <button class="rev" data-tab="proof">Proof tests</button>
@@ -126,7 +126,7 @@
     <div class="controls noprint">
       <span class="muted" id="or-filter"></span>
       <input id="or-q" class="search" placeholder="Search item…">
-      <label class="muted">Sort</label><select id="or-sort"><option value="cat">By category</option><option value="diff">Biggest change from usual</option><option value="qty">Largest order</option><option value="name">A–Z</option></select>
+      <label class="muted">Sort</label><select id="or-sort"><option value="cat">By category</option><option value="diff">Biggest difference from ordering without Unwaste</option><option value="qty">Largest order</option><option value="name">A–Z</option></select>
       <button class="go" id="or-csv">Download order sheet</button><button class="go ghost" id="or-print">Print</button>
     </div>
     <div id="or-out"><p class="muted">Open the Dynamic demand tab first.</p></div>
@@ -140,7 +140,7 @@
       <label class="muted">Show</label><select id="ia-show"><option value="risk">Needs attention</option><option value="all">Everything in stock</option></select>
       <span class="muted" id="ia-count"></span>
     </div>
-    <div class="grid2"><div id="ia-list"><p class="muted">Open the Dynamic demand tab first.</p></div><div class="detail" id="ia-detail"><p class="muted">Click a batch to see why.</p></div></div>
+    <div class="grid2"><div id="ia-list"><p class="muted">Open the Dynamic demand tab first.</p></div><div class="detail" id="ia-detail"><p class="muted">Click an item to see why.</p></div></div>
   </section>
 
   <!-- ======================= INDIA RESULTS ======================= -->
@@ -252,7 +252,7 @@ function histogram(h, qty) {
   s += `<line x1="${L}" x2="${W - 8}" y1="${H - B}" y2="${H - B}" stroke="#9AA3B5"/><line x1="${L}" x2="${L}" y1="${T}" y2="${H - B}" stroke="#9AA3B5"/>`;
   s += `<text x="${L}" y="${H - B + 14}" font-size="10" fill="#5B6270">0</text><text x="${W - 8}" y="${H - B + 14}" font-size="10" fill="#5B6270" text-anchor="end">${qty}</text>`;
   s += `<text x="${(L + W) / 2}" y="${H - 6}" text-anchor="middle" font-size="11" fill="#5B6270">units unsold on the last day</text>`;
-  s += `<text transform="translate(11 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle" font-size="11" fill="#5B6270">simulated weeks</text>`;
+  s += `<text transform="translate(11 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle" font-size="11" fill="#5B6270">possible weeks</text>`;
   return s + '</svg>';
 }
 
@@ -388,7 +388,7 @@ async function liveInit() {
   const sizeOn = () => { const on = !['auto', 'none'].includes($('lv-fest').value); $('lv-size').disabled = !on;
     $('lv-size').title = on ? '' : 'Pick a festival on the left to set its size; calendar festivals already have their size'; };
   $('lv-fest').onchange = sizeOn; sizeOn();
-  $('lv-src').textContent = `Planning for ${dayName(LV.days[0])}, the day after the latest sales (${LV.last_day}). Weather: ${LV.weather_source.startsWith('Open') ? 'live forecast for Gurugram' : 'usual weather for these dates (offline)'}. You can type your own.`;
+  $('lv-src').textContent = `Plan for ${dayName(LV.days[0])} (sales recorded up to ${dayName(LV.last_day)}). Weather for that day comes from the ${LV.weather_source.startsWith('Open') ? 'live forecast for Gurugram' : 'typical weather for this time of year (no internet)'}; change it if you know better. Later days use the forecast.`;
   $('lv-go').onclick = liveRun;
   $('lv-reset').onclick = () => { EDITS = {}; liveRun(); };
   liveRun();
@@ -410,34 +410,35 @@ async function liveRun() {
 function renderIAct(p) {
   const f = flt();
   $('ia-filter').innerHTML = `<b>${filterLabel(f)}</b> (change store or item on the Dynamic demand tab) ·`;
-  const verb = b => b.action === 'transfer' ? `Move ${b.units} to ${b.to_store}` : b.action === 'markdown' ? `Discount 15% now` :
+  const verb = b => b.action === 'transfer' ? (b.n_stores > 1 ? `Move ${b.units} to ${b.n_stores} stores` : `Move ${b.units} to ${b.to_store}`) : b.action === 'markdown' ? `Discount 15% now` :
     b.action === 'hold' ? 'Keep: no better option' : b.action === 'clearance' ? 'Last day: sell at 30% off' : b.action === 'watch' ? 'Keep an eye on it' : 'Fine';
   const pill = b => ({transfer: 'transfer', markdown: 'markdown', hold: 'hold', clearance: 'markdown', watch: 'hold', ok: 'hold'})[b.action];
   const draw = () => {
     const q = $('ia-q').value.trim();
-    $('ia-detail').innerHTML = '<p class="muted">Click a batch to see why.</p>';
+    $('ia-detail').innerHTML = '<p class="muted">Click an item to see why.</p>';
     const rows = p.batches.filter(b => matchS({...b, cat: catOf(p, b.item)}, f) && hit(q, b.item, b.store) && ($('ia-show').value === 'all' || b.action !== 'ok'));
-    $('ia-count').textContent = `${rows.length} of ${p.n_batches} batches in stock tonight · ${rows.filter(b => ['transfer', 'markdown'].includes(b.action)).length} to act on · sample store that ordered every 3 days the usual way`;
+    const nAct = rows.filter(b => ['transfer', 'markdown', 'clearance'].includes(b.action)).length;
+    $('ia-count').textContent = `${rows.length} of ${p.n_batches} deliveries on the shelf · ${nAct} need${nAct === 1 ? 's' : ''} action tonight`;
     $('ia-list').innerHTML = rows.map((b, i) => `<div class="act" data-i="${p.batches.indexOf(b)}">
-        <div><b>${b.store}</b> · ${b.item}<div class="muted">${b.qty} units · arrived ${b.arrived} · last day to sell ${b.sellby} (${b.days_left} day${b.days_left === 1 ? '' : 's'} left)</div></div>
+        <div><b>${b.store}</b> · ${b.item}<div class="muted">${b.qty} units · arrived ${dayName(b.arrived)} · last day to sell ${dayName(b.sellby)} (${b.days_left} day${b.days_left === 1 ? '' : 's'} left)</div></div>
         <div>${riskPill(b.p_leftover)} chance of waste<div class="bar"><i style="width:${Math.round(100 * b.p_leftover)}%"></i></div><div class="muted">about ${Math.round(b.exp_leftover)} unsold if nothing is done</div></div>
         <div><span class="pill ${pill(b)}">${verb(b)}</span></div>
-        <div class="money">${b.value_rs > 0 ? '+' + rs(b.value_rs) : '—'}</div></div>`).join('') || '<p class="muted">Nothing needs attention here tonight. Choose "Everything in stock" to see all batches.</p>';
+        <div class="money">${b.value_rs > 0 ? '+' + rs(b.value_rs) : '—'}</div></div>`).join('') || '<p class="muted">Nothing needs attention here tonight. Choose "Everything in stock" to see all stock.</p>';
     document.querySelectorAll('#ia-list .act').forEach(el => el.onclick = () => {
       document.querySelectorAll('#ia-list .act').forEach(x => x.classList.remove('sel')); el.classList.add('sel');
       const b = p.batches[+el.dataset.i];
       $('ia-detail').innerHTML = `<h3 style="margin:0 0 4px">${b.store} · ${b.item}</h3>
-        <p class="muted">${b.qty} units · ₹${b.price} each · last day to sell ${b.sellby} · customers will want about ${Math.round(b.demand_next)} tomorrow · tonight's order ${b.order_tonight}</p>
-        <p>In <b>${Math.round(100 * b.p_leftover)} of 100</b> simulated weeks, some of this stock was still unsold on its last day.</p>
-        ${histogram(b.hist, b.qty)}<p class="muted">Each bar shows how many simulated weeks ended with that many units unsold.</p>
+        <p class="muted">${b.qty} units · ₹${b.price} each · last day to sell ${dayName(b.sellby)} · customers will want about ${Math.round(b.demand_next)} tomorrow · tonight's order ${b.order_tonight}</p>
+        <p>We played out 100 possible weeks of customers. In <b>${Math.round(100 * b.p_leftover)}</b> of them, some of this stock was still unsold on its last day.</p>
+        ${histogram(b.hist, b.qty)}<p class="muted">Each bar: how many of those weeks ended with that many units unsold.</p>
         <p><span class="pill ${pill(b)}">${verb(b)}</span></p>
-        <p>${b.action === 'transfer' ? `Moving ${b.units} units earns <b>${rs(b.value_rs)}</b> more than letting them expire; the receiving store's forecast has room for them.` :
+        <p>${b.action === 'transfer' ? `${b.n_stores > 1 ? `Where they go: ${b.to_store}.<br>` : ''}Moving ${b.units} units earns <b>${rs(b.value_rs)}</b> more than letting them expire; that store is expected to sell them.` :
           b.action === 'markdown' ? `Marking down now is expected to earn <b>${rs(b.value_rs)}</b> more than waiting.` :
           b.action === 'hold' ? 'At risk, but no store has spare demand and a markdown would lose money.' :
           b.action === 'clearance' ? (() => { const x = p.series[b.series]; return `Its last selling day is tomorrow: too late to move it, so it goes 30% off on the day.<br><br><b>Prevention:</b> ` + (x.order === 0 && x.habit === 0
-            ? `nothing to order tonight; the ${x.on_hand} units on hand already cover tomorrow. This excess came from a 3-day order placed by habit; Unwaste orders daily, sized to the forecast.`
-            : `tonight's order is ${x.order} units with Unwaste vs ${x.habit} by habit. Expected waste from that delivery: <b>${x.waste_u}</b> vs ${x.waste_h} units (${rs((x.waste_h - x.waste_u) * x.price)} saved).`); })() :
-          b.action === 'watch' ? 'Some risk, below the 60% line where Unwaste acts. Re-checked tomorrow night.' : 'Expected to sell before its sell-by line.'}</p>`;
+            ? `nothing to order tonight; the ${x.on_hand} units on hand already cover tomorrow. This extra stock came from an order placed without Unwaste.`
+            : `tonight's order is ${x.order} units with Unwaste (${x.habit} without). Likely to expire from that delivery: <b>${x.waste_u}</b> units instead of ${x.waste_h} (${rs((x.waste_h - x.waste_u) * x.price)} saved).`); })() :
+          b.action === 'watch' ? (b.p_leftover >= 0.6 ? 'High risk, but no store can take it and a discount would lose money. Checked again tomorrow night.' : 'Some risk, but under 60%, so no action yet. Checked again tomorrow night.') : 'Expected to sell before its last day.'}</p>`;
     });
   };
   $('ia-show').onchange = draw; draw();
@@ -487,12 +488,12 @@ function renderLive(p) {
     .sort((x, y) => Math.abs(y[1][0] - y[1][1]) - Math.abs(x[1][0] - x[1][1])).slice(0, 3)
     .map(([k, b]) => [k, 100 * (b[0] / b[1] - 1)]);
   const pct = v => Math.abs(v) < 0.5 ? 'same' : (v > 0 ? '+' : '−') + Math.abs(v).toFixed(0) + '%';
-  const demandLine = dNorm > 0 ? `Expected demand on ${dayName(p.target)} vs a normal day (usual weather, no festival): <b>${pct(100 * (dNow / dNorm - 1))}</b>${
+  const demandLine = dNorm > 0 ? `Customers expected on ${dayName(p.target)} compared with a normal day (typical weather, no festival): <b>${pct(100 * (dNow / dNorm - 1))}</b>${
     movers.length ? ' · biggest changes: ' + movers.map(([k, v]) => `${k} ${pct(v)}`).join(', ') : ''}<br>` : '';
   let h = `<div class="card" id="lv-msg" style="border-left:5px solid #1C7C3A">
       <b>Updated${UPDATED ? ' at ' + UPDATED.toLocaleTimeString('en-IN', {hour: '2-digit', minute: '2-digit'}) : ''}</b> · ${filterLabel(f)} · ${w.temp}°C, ${w.rain} mm rain, ${fest}${nEdit ? ` · ${nEdit} stock edit${nEdit > 1 ? 's' : ''}` : ''}<br>
-      ${demandLine}Tonight's order <b>${fmt(sum(S, 'order'))} units</b> (usual way ${fmt(sum(S, 'habit'))}) · <b>${fmt(moved)}</b> units to move · <b>${acts.filter(a => a.action === 'markdown').length}</b> discounts
-      ${gainDay ? ` · Unwaste earns <b>${rs(gainDay)}/day</b> more than the usual way for these items (111-day test)` : ''}
+      ${demandLine}Tonight's order <b>${fmt(sum(S, 'order'))} units</b> (without Unwaste: ${fmt(sum(S, 'habit'))}) · <b>${fmt(moved)}</b> units to move · <b>${acts.filter(a => a.action === 'markdown').length}</b> discounts
+      ${gainDay ? ` · Unwaste earns about <b>${rs(gainDay)} a day</b> more for these items` : ''}
       <div class="row" style="gap:10px;margin-top:10px"><button class="go" onclick="document.querySelector('nav button[data-tab=order]').click()">See tonight's order →</button>
       <button class="go ghost" onclick="document.querySelector('nav button[data-tab=iact]').click()">See store actions →</button></div></div>`;
   const rows = S.filter(x => hit(q, x.item, x.store)).sort((a, b) => a.item.localeCompare(b.item) || a.store.localeCompare(b.store));
@@ -506,10 +507,10 @@ function renderLive(p) {
           <button class="go ghost" style="padding:4px 12px" onclick="stockStep(${x.idx}, 1)">+</button>
           ${EDITS[x.idx] !== undefined ? `<span class="vs"> originally ${fmt(BASE[x.idx])}</span>` : ''}</td></tr>`; }).join('')}</table></div>`;
   h += `<details style="margin-top:18px"><summary class="muted" style="cursor:pointer">How is this calculated?</summary><div class="card" style="margin-top:8px;font-size:13px;line-height:1.6">
-    <b>Forecast:</b> one LightGBM model trained on 2024–2026 sales of all stores, using recent sales, weekday, month, weather (including how much warmer or colder the day is than the last two weeks, and how strongly each item reacted to that in the past), the festival calendar and price; it predicts quiet, likely and busy days for the next week (P10, P50, P90).<br>
-    <b>Order:</b> the quantity with the best expected profit over ${p.mc_paths} simulated weeks of demand, counting sales, waste and a cost for sold-out items, never below the 60th percentile of demand until the next delivery. Usual way = recent sales + 15%.<br>
-    <b>Stock edits:</b> extra units arrive as a fresh batch today; fewer units are removed from the oldest batches first.<br>
-    <b>Gain per day:</b> from the 111-day test, both ways of ordering run on the same customer demand.</div></details>`;
+    <b>How many customers:</b> learned from almost 3 years of sales at all 10 stores: weekday, season, weather, festivals and price. It also gives a quiet-day and a busy-day number.<br>
+    <b>How much to order:</b> for each item we play out many possible weeks of customers and pick the amount that makes the most money once thrown-away stock and empty shelves are counted.<br>
+    <b>Stock changes:</b> extra units count as a fresh delivery today; fewer units are taken from the oldest stock first.<br>
+    <b>Money per day:</b> both ways of ordering were run on the same 3½ months of past customers.</div></details>`;
   $('lv-out').innerHTML = h;
 }
 function stockSet(i, v) { const n = Math.max(0, Math.round(+v || 0)); if (n === BASE[i]) delete EDITS[i]; else EDITS[i] = n; renderLive(LVP); }
@@ -525,19 +526,26 @@ function orderReasons(p, x) {
   const untilTxt = n === 1 ? 'tomorrow' : `the next ${n} days`;
   if (x.edited) out.push(`You set the stock to ${fmt(x.edited_to)}.`);
   if (x.moved_out > 0) out.push(`${fmt(x.moved_out)} units are being moved tonight to other stores that will sell them.`);
-  const fest = p.calendar.slice(0, n + 1).find(c => c.fest_name && c.days_to_fest <= 3);
-  if (fest && chg >= 3) out.push(`${fest.fest_name} is coming, so people will buy about ${chg}% more than usual.`);
-  const wet = p.weather.slice(0, n).find(w => w.rain >= 10);
-  if (wet && chg >= 3 && !fest) out.push(`Heavy rain on ${dayName(wet.date)}: more people order online.`);
-  const hot = p.weather.slice(0, n).find(w => w.temp >= 38);
-  if (hot && !fest && !wet && chg >= 3) out.push(`Very hot on ${dayName(hot.date)}: cold drinks and curd sell more.`);
+  const movedIn = (x.after_moves || 0) - (x.on_hand - (x.moved_out || 0));
+  if (movedIn > 0) out.push(`${fmt(movedIn)} units are coming tonight from other stores that have too many.`);
+  const fest = p.calendar.slice(0, n).find(c => c.fest_name && c.days_to_fest <= 3);
+  const moreLess = `about ${Math.abs(chg)}% ${chg > 0 ? 'more' : 'less'} than on a normal day`;
+  const wet = p.weather.slice(0, n).find(w => w.rain >= 10), w0 = p.weather[0];
+  const hot = w0.temp >= 28, cold = w0.temp <= 13;
+  const chg1 = x.normal[0] ? Math.round(100 * (x.p50[0] / x.normal[0] - 1)) : 0;
+  if (fest && chg >= 3) out.push(`${fest.fest_name} is coming: customers will buy ${moreLess}.`);
+  else if (w0.rain >= 10 && Math.abs(chg1) >= 3) out.push(`Heavy rain on ${dayName(p.days[0])}: customers will buy about ${Math.abs(chg1)}% ${chg1 > 0 ? 'more' : 'less'} that day than on a normal day.`);
+  else if (wet && Math.abs(chg) >= 3) out.push(`Heavy rain expected: customers will buy ${moreLess}.`);
+  else if ((hot || cold) && Math.abs(chg1) >= 3) out.push(`${hot ? 'Hot' : 'Cold'} weather on ${dayName(p.days[0])} (${w0.temp}°C): customers will buy about ${Math.abs(chg1)}% ${chg1 > 0 ? 'more' : 'less'} that day than on a normal day.`);
   const pc = p.price_change[x.cat];
   if (pc) out.push(pc > 0 ? `Price is ${pc}% higher, so people will buy a little less.` : `Price is ${-pc}% lower, so people will buy more.`);
   if (x.order === 0 && x.on_hand > 0) out.push(`You already have ${fmt(x.on_hand)} in stock, enough for ${untilTxt}. No need to order.`);
-  else if (less && x.after_moves > 0) out.push(`You will still have ${fmt(x.after_moves)} in stock, so we order less to avoid throwing stock away.`);
-  if (more && !fest && !wet && !hot && !pc) out.push('This item sold out on some recent evenings, so real demand is higher than the sales show.');
-  if (!out.length && less && chg <= -3) out.push(`People are expected to buy about ${-chg}% less than usual.`);
-  if (!out.length) out.push('Same as usual.');
+  else if (less && x.after_moves > 0) out.push(`You will have ${fmt(x.after_moves)} in stock, so we order less to avoid throwing stock away.`);
+  if (x.order > 0 && x.oldest_sellby && x.cycle > 1 && x.after_moves >= want && x.oldest_sellby < p.days[Math.min(x.cycle, p.days.length) - 1])
+    out.push(`Your stock's last day to sell is ${dayName(x.oldest_sellby)}, so fresh stock is needed after that.`);
+  if (more && !fest && !wet && !hot && !cold && !pc) out.push('This item sold out on some recent evenings, so real demand is higher than the sales show.');
+  if (!out.length && Math.abs(chg) >= 3) out.push(`Customers are expected to buy ${moreLess}.`);
+  if (!out.length) out.push('A normal order: nothing unusual for this item.');
   return out.join(' ');
 }
 function orderRows(p) {
@@ -568,22 +576,22 @@ function renderOrder(p) {
   const many = !f.store;
   let h = `<div class="section-title"><h2>Order for delivery on ${dayName(p.days[0])} · ${filterLabel(f)}</h2><span class="muted">placed tonight, arrives tomorrow morning</span></div>
     <div class="hero">
-      <div class="card"><div class="lbl">Units to order tonight</div><div class="kpi">${fmt(units)}</div><div class="sub">usual way: ${fmt(usual)} · ${ordered.length} items</div>
+      <div class="card"><div class="lbl">Units to order tonight</div><div class="kpi">${fmt(units)}</div><div class="sub">without Unwaste: ${fmt(usual)} · ${ordered.length} items</div>
         <div class="metric">Each item ordered to last until its next delivery</div></div>
       <div class="card"><div class="lbl">Order value (at cost)</div><div class="kpi">${rs(value)}</div><div class="sub">${fmt(skipped.length)} item${skipped.length === 1 ? '' : 's'} need no order tonight</div>
-        <div class="metric">Purchase cost = 70% of selling price</div></div>
-      <div class="card good"><div class="lbl">Money vs the usual way</div><div class="kpi">${rs(rows.reduce((t, r) => t + (r.gain_day || 0), 0))}/day</div>
+        <div class="metric">Buying price is about 70% of selling price</div></div>
+      <div class="card good"><div class="lbl">Extra money with Unwaste</div><div class="kpi">${rs(rows.reduce((t, r) => t + (r.gain_day || 0), 0))} a day</div>
         <div class="sub">${rows.filter(r => (r.gain_day || 0) > 0.5).length} items earn more, ${rows.filter(r => (r.gain_day || 0) < -0.5).length} earn less</div>
-        <div class="metric">Measured over 111 days with both ways of ordering on the same customer demand</div></div>
+        <div class="metric">Average per day when both ways of ordering were tried on the same 3½ months of past customers</div></div>
       <div class="card good"><div class="lbl">Waste avoided by this order</div><div class="kpi">${fmt(Math.max(0, Math.round(wH - wU)))} units</div>
-        <div class="sub">${rs(wRs)} kept · likely waste ${fmt(Math.round(wU))} vs ${fmt(Math.round(wH))} the usual way</div>
-        <div class="metric">Units from this delivery likely to expire unsold, vs ordering the usual way</div></div>
+        <div class="sub">${rs(wRs)} saved · likely to expire: ${fmt(Math.round(wU))} instead of ${fmt(Math.round(wH))}</div>
+        <div class="metric">Units from this delivery likely to expire unsold, compared with ordering without Unwaste</div></div>
     </div>
     <div class="row" style="gap:18px;margin:12px 0 6px;font-size:12px" class="muted">
-      <span><span class="chg less">−20%</span> ordering less than usual</span><span><span class="chg more">+20%</span> ordering more</span>
-      <span><span style="display:inline-block;width:40px;height:8px;background:#2B59F3;border-radius:4px"></span> our order &nbsp;<span style="display:inline-block;width:2px;height:12px;background:#14171F"></span> usual order</span>
+      <span><span class="chg less">−20%</span> ordering less than without Unwaste</span><span><span class="chg more">+20%</span> ordering more</span>
+      <span><span style="display:inline-block;width:40px;height:8px;background:#2B59F3;border-radius:4px"></span> Unwaste order &nbsp;<span style="display:inline-block;width:2px;height:12px;background:#14171F"></span> without Unwaste</span>
       ${['dairy', 'bakery', 'eggs_meat', 'vegetables', 'fruits'].map(c => `<span class="cat ${c}">${CAT[c]}</span>`).join(' ')}</div>
-    <div class="scroll" style="max-height:none"><table><tr><th>Item</th>${many ? '<th>Store</th>' : ''}<th>Order tonight</th><th style="width:170px">Our order vs usual</th><th>Change</th><th>Delivery</th><th>Lasts until</th><th>Customers will want</th><th>In stock</th><th>Money vs usual way <span class="vs">(per day, 111-day test)</span></th><th style="text-align:left">Why</th></tr>`;
+    <div class="scroll" style="max-height:none"><table><tr><th>Item</th>${many ? '<th>Store</th>' : ''}<th>Order tonight</th><th style="width:170px">Compared with ordering without Unwaste</th><th>Change</th><th>Delivery</th><th>Lasts until</th><th>Customers will want</th><th>In stock</th><th>Extra money a day</th><th style="text-align:left">Why</th></tr>`;
   let lastCat = null;
   ordered.forEach(r => {
     if (sk === 'cat' && r.cat !== lastCat) { h += `<tr class="catrow"><td colspan="${many ? 11 : 10}">${CAT[r.cat]}</td></tr>`; lastCat = r.cat; }
@@ -591,8 +599,8 @@ function renderOrder(p) {
     const cls = small ? (dU <= -2 ? 'less' : dU >= 2 ? 'more' : 'same') : (r.diff <= -10 ? 'less' : r.diff >= 10 ? 'more' : 'same');
     h += `<tr><td><span class="cat ${r.cat}" title="${CAT[r.cat]}">&nbsp;</span> <b>${r.item}</b></td>${many ? `<td>${r.store}</td>` : ''}
       <td style="font-size:18px"><b>${fmt(r.order)}</b></td>
-      <td><div class="qbar"><i style="width:${100 * r.order / maxQ}%"></i><b style="left:${100 * r.habit / maxQ}%"></b></div><span class="vs">usual ${fmt(r.habit)}</span></td>
-      <td><span class="chg ${cls}">${r.habit < 5 ? (r.order - r.habit > 0 ? '+' : r.order - r.habit < 0 ? '−' : '') + Math.abs(r.order - r.habit) + ' units' : (r.diff > 0 ? '+' : r.diff < 0 ? '−' : '') + Math.abs(r.diff) + '%'}</span></td>
+      <td><div class="qbar"><i style="width:${100 * r.order / maxQ}%"></i><b style="left:${100 * r.habit / maxQ}%"></b></div><span class="vs">without: ${fmt(r.habit)}</span></td>
+      <td><span class="chg ${cls}">${r.habit < 5 ? (r.order - r.habit > 0 ? '+' : r.order - r.habit < 0 ? '−' : '') + Math.abs(r.order - r.habit) + (Math.abs(r.order - r.habit) === 1 ? ' unit' : ' units') : (r.diff > 0 ? '+' : r.diff < 0 ? '−' : '') + Math.abs(r.diff) + '%'}</span></td>
       <td>${r.cycle === 1 ? 'Daily' : `Every ${r.cycle} days`}</td><td>${dayName(r.until)}</td>
       <td>${fmt(Math.round(r.want))} <span class="vs">over ${r.cycle} day${r.cycle > 1 ? 's' : ''}</span></td><td>${fmt(r.on_hand)}</td>
       <td>${r.gain_day === null || r.gain_day === undefined ? '—' : `<span class="chg ${r.gain_day > 0.5 ? 'less' : r.gain_day < -0.5 ? 'more' : 'same'}">${r.gain_day > 0.5 ? '+' : r.gain_day < -0.5 ? '−' : ''}₹${fmt(Math.abs(Math.round(r.gain_day)))}</span>`}</td>
@@ -606,7 +614,7 @@ function renderOrder(p) {
 }
 function orderCSV() {
   const p = LVP, rows = window._orderRows || [];
-  const head = ['delivery_date', 'store', 'item', 'category', 'order_units', 'usual_units', 'delivery_cycle_days', 'lasts_until', 'expected_demand', 'in_stock', 'gain_per_day_rs', 'reason'];
+  const head = ['delivery_date', 'store', 'item', 'category', 'order_units', 'without_unwaste_units', 'delivery_cycle_days', 'lasts_until', 'expected_demand', 'in_stock', 'gain_per_day_rs', 'reason'];
   const esc = v => `"${String(v).replace(/"/g, '""')}"`;
   const lines = [head.join(',')].concat(rows.map(r => [p.days[0], r.store, r.item, CAT[r.cat], r.order, r.habit, r.cycle, r.until, Math.round(r.want), r.on_hand, Math.round(r.gain_day || 0), r.why].map(esc).join(',')));
   const a = document.createElement('a');

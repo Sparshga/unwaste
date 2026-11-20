@@ -208,7 +208,11 @@ def predict(inputs: dict) -> dict:
         cur_q = sum(b.qty for b in stock[s_] if b.qty > 0)
         if new > cur_q:
             sd = int(meta["sellable_days"].iloc[s_])
-            stock[s_].append(Batch(new - cur_q, t + sd - 1, t, f"{s_}-edit"))
+            same = [b for b in stock[s_] if b.qty > 0 and b.sellby == t + sd - 1]
+            if same:                                 # more of today's delivery than recorded
+                same[0].qty += new - cur_q
+            else:
+                stock[s_].append(Batch(new - cur_q, t + sd - 1, t, f"{s_}-edit"))
         elif new < cur_q:
             cut = cur_q - new
             for b in sorted([b for b in stock[s_] if b.qty > 0], key=lambda b: (b.sellby, b.arrival)):
@@ -243,6 +247,7 @@ def predict(inputs: dict) -> dict:
     for s, p in enumerate(meta["product_id"].to_numpy()):
         by_product.setdefault(p, []).append(s)
     rng = np.random.default_rng(cfg.seed)
+    pos_before = np.array([sum(b.qty for b in stock[s] if b.qty > 0 and b.sellby >= t + 1) for s in range(len(meta))])
     _nightly_actions(t, stock, Ffull, meta, by_product, np.full(len(meta), -1), [], led, cfg, rng, True)
     sell_days, price = meta["sellable_days"].to_numpy(), meta["price"].to_numpy()
     orders, habit = np.zeros(len(meta), int), np.zeros(len(meta), int)
@@ -251,8 +256,7 @@ def predict(inputs: dict) -> dict:
         cs = replace(cfg, review_period_days=int(meta["review_days"].iloc[s])) if "review_days" in meta.columns else cfg
         orders[s] = newsvendor_order(cur, F[0.1][s], F[0.5][s], F[0.9][s], t + 1, int(sell_days[s]),
                                      float(price[s]), cs, rng)
-        pos = sum(b.qty for b in cur if b.sellby >= t + 1)
-        habit[s] = baseline_order(st["S_tail"][s, -7:], pos, cs)            # habit: recent sales + 15%, to the next delivery
+        habit[s] = baseline_order(st["S_tail"][s, -7:], int(pos_before[s]), cs)   # without Unwaste: no moves either            # habit: recent sales + 15%, to the next delivery
     on_hand = np.array([sum(b.qty for b in stock[s] if b.qty > 0) for s in range(len(meta))])
 
     # KPI: expected waste from tonight's order and lost sales tomorrow, Unwaste vs habit (same demand paths)
@@ -288,11 +292,19 @@ def predict(inputs: dict) -> dict:
                      "units": a["units"], "p_leftover": a["p_leftover"], "value_rs": a["value_rs"],
                      "sellby": str((st["dates_tail"][0] + pd.Timedelta(days=int(a["sellby"]))).date())})
     acts.sort(key=lambda a: -a["value_rs"])
-    by_uid = {(a["series"], a["batch"]): a for a in led.actions}
+    by_uid = {}
+    for a in led.actions:
+        by_uid.setdefault((a["series"], a["batch"]), []).append(a)
     for b in batches:
-        a = by_uid.get((b["series"], b["uid"]))
-        if a:
+        al = by_uid.get((b["series"], b["uid"]))
+        if al:
+            a = al[0]
+            moves = [x for x in al if x["action"] == "transfer"]
             b.update({"action": a["action"], "units": a["units"], "to_store": a["to_store"], "value_rs": a["value_rs"]})
+            if len(moves) > 1:
+                b.update({"action": "transfer", "units": int(sum(x["units"] for x in moves)),
+                          "to_store": ", ".join(f'{x["to_store"]} {x["units"]}' for x in moves),
+                          "n_stores": len(moves), "value_rs": float(sum(x["value_rs"] for x in moves))})
         elif b["p_leftover"] >= 0.3 and b["days_left"] <= 1:
             b["action"] = "clearance"          # sells its last day tomorrow: too late to move, 30% off on the day
         elif b["p_leftover"] >= 0.3:
