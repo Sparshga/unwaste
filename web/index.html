@@ -108,15 +108,15 @@
         <div><label>How big?</label><select id="lv-size"><option value="1">Major festival</option><option value="0.5">Small festival</option></select></div>
         <div><label>Change price of</label><select id="lv-pcat"></select></div>
         <div><label>By how much %</label><input id="lv-pct" type="number" step="1" placeholder="e.g. 20 or -15"></div>
-        <div><button class="go" id="lv-go">Update plan</button></div>
+        <div><button class="go" id="lv-go">Update</button></div>
       </div>
       <p class="muted" id="lv-src" style="margin:10px 0 0"></p>
     </div>
     <div class="controls" id="lv-filters" style="margin-top:14px">
       <label class="muted">Store</label><select id="lv-store"></select>
       <label class="muted">Item</label><select id="lv-item"></select>
-      <input id="lv-q" class="search" placeholder="Search item or store…">
-      <label class="muted">Sort</label><select id="lv-sort"><option value="risk">Most waste risk first</option><option value="chg">Biggest change first</option><option value="name">A–Z</option></select>
+      <input id="lv-q" class="search" placeholder="Search item…">
+      <button class="go ghost" id="lv-reset">Reset stock</button>
     </div>
     <div id="lv-out"><p class="muted">Start the server with <code>uvicorn unwaste.api:app --port 8000</code> and open this page from it.</p></div>
   </section>
@@ -386,6 +386,7 @@ async function liveInit() {
   prefill();
   $('lv-src').textContent = `Planning for ${dayName(LV.days[0])}, the day after the latest sales (${LV.last_day}). Weather: ${LV.weather_source.startsWith('Open') ? 'live forecast for Gurugram' : 'usual weather for these dates (offline)'}. You can type your own.`;
   $('lv-go').onclick = liveRun;
+  $('lv-reset').onclick = () => { EDITS = {}; liveRun(); };
   liveRun();
 }
 async function liveRun() {
@@ -393,12 +394,13 @@ async function liveRun() {
   const body = {target: LV.days[0],
     weather: {temp: $('lv-temp').value, rain: $('lv-rain').value, humidity: $('lv-hum').value},
     festival: {type: $('lv-fest').value, size: parseFloat($('lv-size').value)},
-    price_change: cat && pct !== '' ? {[cat]: parseFloat(pct)} : {}};
-  $('lv-out').innerHTML = '<p class="muted">Predicting…</p>';
+    price_change: cat && pct !== '' ? {[cat]: parseFloat(pct)} : {}, stock_edits: EDITS};
+  $('lv-msg') && ($('lv-msg').innerHTML = '<span class="muted">Updating…</span>');
   const r = await fetch('/api/live/predict', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
   if (!r.ok) { $('lv-out').innerHTML = `<p class="muted">Error: ${await r.text()}</p>`; return; }
   const p = await r.json();
-  LVP = p;
+  LVP = p; UPDATED = new Date();
+  if (!BASE || !Object.keys(EDITS).length) BASE = p.series.map(x => x.on_hand);
   renderLive(p); renderIAct(p); renderOrder(p);
 }
 function renderIAct(p) {
@@ -440,7 +442,7 @@ const DEFAULT_STORE = 'Gurugram Sector 45';
 const CAT = {dairy: 'Dairy', bakery: 'Bakery', eggs_meat: 'Eggs & meat', vegetables: 'Vegetables', fruits: 'Fruits'};
 const FEST = {holi: 'Holi', eid: 'Eid', diwali: 'Diwali', sweets: 'Sweets festival (Rakhi, Bhai Dooj, Karwa Chauth)', navratri: 'Navratri (fasting)', chhath: 'Chhath',
   puja: 'Puja festival (Janmashtami, Dussehra…)', christmas: 'Christmas / New Year', national: 'National holiday', harvest: 'Lohri / Sankranti'};
-let LVP = null;
+let LVP = null, EDITS = {}, UPDATED = null, BASE = null;
 function initFilters(p) {
   const st = $('lv-store'), it = $('lv-item');
   if (st.options.length) return;
@@ -450,7 +452,7 @@ function initFilters(p) {
   it.innerHTML = '<option value="">All items</option>' + cats.map(c => `<option value="cat:${c}">All ${(CAT[c] || c).toLowerCase()}</option>`).join('') +
     items.map(i => `<option>${i}</option>`).join('');
   const redraw = () => { renderLive(LVP); renderIAct(LVP); renderOrder(LVP); };
-  st.onchange = redraw; it.onchange = redraw; $('lv-sort').onchange = redraw;
+  st.onchange = redraw; it.onchange = redraw;
   $('or-q').oninput = () => renderOrder(LVP); $('or-sort').onchange = () => renderOrder(LVP);
   $('or-csv').onclick = orderCSV; $('or-print').onclick = () => window.print();
   $('lv-q').oninput = () => renderLive(LVP); $('ia-q').oninput = () => renderIAct(LVP);
@@ -466,68 +468,39 @@ function filterLabel(f) { return `${f.store || 'All stores'} · ${!f.item ? 'all
 
 function renderLive(p) {
   initFilters(p);
-  const f = flt(), K = p.k, w = p.weather_used, fe = p.festival_used, q = $('lv-q').value.trim();
+  const f = flt(), q = $('lv-q').value.trim(), w = p.weather_used, fe = p.festival_used;
   const S = p.series.map((x, i) => ({...x, idx: i})).filter(x => matchS(x, f));
-  const sum = (arr, key, d) => arr.reduce((t, x) => t + (d === undefined ? x[key] : x[key][d]), 0);
-  const demand = sum(S, 'p50', K), normal = sum(S, 'normal', K), chg = normal ? Math.round(1000 * (demand / normal - 1)) / 10 : 0;
-  const idxs = new Set(S.map(x => x.idx));
-  const B = p.batches.filter(b => idxs.has(b.series));
-  const atRiskRs = B.reduce((t, b) => t + b.exp_leftover * b.price, 0), atRiskU = B.reduce((t, b) => t + b.exp_leftover, 0);
-  const riskyN = B.filter(b => b.p_leftover >= 0.6).length;
+  const sum = (a, k) => a.reduce((t, x) => t + (x[k] || 0), 0);
   const acts = p.actions.filter(a => (!f.store || a.store === f.store || a.to_store === f.store) && inItem(a.item, catOf(p, a.item), f));
-  const recovered = acts.filter(a => !f.store || a.store === f.store).reduce((t, a) => t + a.value_rs, 0);
   const moved = acts.filter(a => a.action === 'transfer' && (!f.store || a.store === f.store)).reduce((t, a) => t + a.units, 0);
-  const wU = sum(S, 'waste_u'), wH = sum(S, 'waste_h'), wRsU = S.reduce((t, x) => t + x.waste_u * x.price, 0), wRsH = S.reduce((t, x) => t + x.waste_h * x.price, 0);
-  const lU = sum(S, 'lost_u'), lH = sum(S, 'lost_h'), oU = sum(S, 'order'), oH = sum(S, 'habit');
-  const wCut = wH ? Math.round(100 * (1 - wU / wH)) : 0;
-  const fest = fe.fest_name ? `${fe.fest_name} ${fe.days_to_fest ? 'in ' + fe.days_to_fest + ' day(s)' : 'today'}` : 'no festival';
-  let h = `<div class="section-title"><h2>Plan for ${p.target} · ${filterLabel(f)}</h2><span class="muted">${w.temp}°C · ${w.rain} mm rain · ${fest}</span></div>
-    <div class="hero">
-      <div class="card ${chg >= 0 ? 'good' : 'warn'}"><div class="lbl">Customers will want</div><div class="kpi">${fmt(Math.round(demand))} units</div>
-        <div class="sub"><b class="${chg >= 0 ? 'up' : 'down'}">${signed(chg, '%')}</b> vs a normal day (${fmt(Math.round(normal))})</div>
-        <div class="metric">Normal day = same date with usual weather, no festival and today's prices</div></div>
-      <div class="card good"><div class="lbl">Waste from tonight's order</div><div class="kpi">${fmt(Math.round(wU))} units</div>
-        <div class="sub">usual way of ordering: ${fmt(Math.round(wH))} · <b>${ok(wCut) && wH ? (wCut >= 0 ? '−' : '+') + Math.abs(wCut) + '%' : '—'}</b> · saves ${rs(wRsH - wRsU)}</div>
-        <div class="metric">Units from tonight's delivery likely to expire unsold. Order ${fmt(oU)} units vs ${fmt(oH)} the usual way</div></div>
-      <div class="card warn"><div class="lbl">Stock on the shelf that may expire</div><div class="kpi">${rs(atRiskRs)}</div>
-        <div class="sub">${fmt(Math.round(atRiskU))} units · ${riskyN} batch${riskyN === 1 ? '' : 'es'} need attention</div>
-        <div class="metric">Stock already in the store, if nothing is done this week</div></div>
-      <div class="card"><div class="lbl">Saved by tonight's actions</div><div class="kpi">${rs(recovered)}</div>
-        <div class="sub">${fmt(moved)} units moved to stores that will sell them · ${acts.filter(a => a.action === 'markdown').length} discounts</div>
-        <div class="metric">Money kept instead of throwing the stock away</div></div>
-    </div>
-    `;
-  const single = S.length === 1;
-  const tot = key => p.days.map((_, d) => Math.round(S.reduce((t, x) => t + x[key][d], 0)));
-  const lines = [{name: 'Most likely', data: tot('p50'), color: '#2B59F3'}, {name: 'Normal day', data: tot('normal'), color: '#9AA3B5', dash: true, width: 2}];
-  if (single) lines.push({name: 'Busy day', data: tot('p90'), color: '#9DB4F7', width: 1.5}, {name: 'Quiet day', data: tot('p10'), color: '#9DB4F7', width: 1.5});
-  h += `<div class="card" style="margin-top:14px"><b>Next 7 days · ${filterLabel(f)}</b>${svgLines(lines,
-      {h: 260, shade: p.days.map((d, i) => i === K), xlabels: p.days.map(d => d.slice(5)), ytitle: 'units customers want per day', xtitle: 'date (shaded = the day you are planning for)'})}
-      <p class="muted">${single ? '8 days in 10 fall between the quiet-day and busy-day lines.' : 'Pick one store and one item to also see the busy-day and quiet-day range.'}</p></div>`;
-  // table
-  const byStore = !f.store && f.item && !f.item.startsWith('cat:');
-  const groups = {};
-  S.forEach(x => { const g = byStore ? x.store : x.item; (groups[g] = groups[g] || []).push(x); });
-  const rowsOne = Object.values(groups).every(g => g.length === 1);
-  let rows = Object.entries(groups).map(([g, xs]) => {
-    const ii = new Set(xs.map(x => x.idx)), bb = B.filter(b => ii.has(b.series));
-    const r = {name: g, normal: sum(xs, 'normal', K), p50: sum(xs, 'p50', K), p10: sum(xs, 'p10', K), p90: sum(xs, 'p90', K), order: sum(xs, 'order'), habit: sum(xs, 'habit'),
-      on_hand: sum(xs, 'on_hand'), shelf: xs[0].shelf, risk: bb.reduce((m, b) => Math.max(m, b.p_leftover), 0), exp: bb.reduce((t, b) => t + b.exp_leftover, 0),
-      rsk: bb.reduce((t, b) => t + b.exp_leftover * b.price, 0), stores: xs.map(x => x.store).join(' ')};
-    r.chg = r.normal ? Math.round(1000 * (r.p50 / r.normal - 1)) / 10 : 0; return r; })
-    .filter(r => hit(q, r.name, r.stores));
-  const sk = $('lv-sort').value;
-  rows.sort((a, b) => sk === 'name' ? a.name.localeCompare(b.name) : sk === 'chg' ? b.chg - a.chg : (b.rsk - a.rsk) || (b.risk - a.risk));
-  h += `<div class="section-title"><h2>${byStore ? 'By store' : 'By item'}, ${p.target}</h2><span class="muted">Chance of waste = how likely stock in the store expires before it sells</span></div>
-    <div class="scroll"><table><tr><th>${byStore ? 'Store' : 'Item'}</th><th>Customers will want${rowsOne ? ' <span class="vs">(quiet–busy)</span>' : ''}</th><th>vs normal</th><th>Order tonight <span class="vs">(usual)</span></th><th>In stock</th><th>Chance of waste</th><th>May expire</th>${byStore ? '' : '<th>Shelf life</th>'}</tr>${
-    rows.map(r => `<tr><td><b>${r.name}</b></td><td><b>${fmt(Math.round(r.p50))}</b>${rowsOne ? ` <span class="muted">(${fmt(Math.round(r.p10))}–${fmt(Math.round(r.p90))})</span>` : ''}</td><td class="${r.chg > 3 ? 'up' : r.chg < -3 ? 'down' : ''}">${signed(r.chg, '%')}</td><td><b>${fmt(r.order)}</b> <span class="vs">(${fmt(r.habit)})</span></td><td>${fmt(r.on_hand)}</td><td>${riskPill(r.risk)}</td><td>${r.exp >= 0.5 ? fmt(Math.round(r.exp)) + ' · ' + rs(r.rsk) : '—'}</td>${byStore ? '' : `<td>${r.shelf} d</td>`}</tr>`).join('') || '<tr><td colspan="8">No match.</td></tr>'}</table></div>`;
+  const fest = fe.fest_name ? `${fe.fest_name} ${fe.days_to_fest ? 'in ' + fe.days_to_fest + ' day(s)' : 'that day'}` : 'no festival';
+  const nEdit = Object.keys(EDITS).length;
+  const gainDay = S.reduce((t, x) => t + (x.gain_day || 0), 0);
+  let h = `<div class="card" id="lv-msg" style="border-left:5px solid #1C7C3A">
+      <b>Updated${UPDATED ? ' at ' + UPDATED.toLocaleTimeString('en-IN', {hour: '2-digit', minute: '2-digit'}) : ''}</b> · ${filterLabel(f)} · ${w.temp}°C, ${w.rain} mm rain, ${fest}${nEdit ? ` · ${nEdit} stock edit${nEdit > 1 ? 's' : ''}` : ''}<br>
+      Tonight's order <b>${fmt(sum(S, 'order'))} units</b> (usual way ${fmt(sum(S, 'habit'))}) · <b>${fmt(moved)}</b> units to move · <b>${acts.filter(a => a.action === 'markdown').length}</b> discounts
+      ${gainDay ? ` · Unwaste earns <b>${rs(gainDay)}/day</b> more than the usual way for these items (111-day test)` : ''}
+      <div class="row" style="gap:10px;margin-top:10px"><button class="go" onclick="document.querySelector('nav button[data-tab=order]').click()">See tonight's order →</button>
+      <button class="go ghost" onclick="document.querySelector('nav button[data-tab=iact]').click()">See store actions →</button></div></div>`;
+  const rows = S.filter(x => hit(q, x.item, x.store)).sort((a, b) => a.item.localeCompare(b.item) || a.store.localeCompare(b.store));
+  h += `<div class="section-title"><h2>Stock in the store now</h2><span class="muted">Change a number with − / + or type it, then press Update</span></div>
+    <div class="scroll" style="max-height:none"><table><tr><th>Item</th>${f.store ? '' : '<th>Store</th>'}<th>Shelf life</th><th>In stock now</th><th>Oldest units sell by</th><th>Change stock</th></tr>${
+    rows.map(x => { const cur = EDITS[x.idx] !== undefined ? EDITS[x.idx] : x.on_hand;
+      return `<tr${EDITS[x.idx] !== undefined ? ' style="background:#FFF8E6"' : ''}><td><span class="cat ${x.cat}">&nbsp;</span> <b>${x.item}</b></td>${f.store ? '' : `<td>${x.store}</td>`}
+        <td>${x.shelf} d</td><td><b>${fmt(x.on_hand)}</b></td><td>${x.oldest_sellby ? dayName(x.oldest_sellby) : '—'}</td>
+        <td><button class="go ghost" style="padding:4px 12px" onclick="stockStep(${x.idx}, -1)">−</button>
+          <input type="number" min="0" value="${cur}" style="width:80px;margin:0 6px;padding:5px 8px;border:1px solid var(--line);border-radius:6px" onchange="stockSet(${x.idx}, this.value)">
+          <button class="go ghost" style="padding:4px 12px" onclick="stockStep(${x.idx}, 1)">+</button>
+          ${EDITS[x.idx] !== undefined ? `<span class="vs"> originally ${fmt(BASE[x.idx])}</span>` : ''}</td></tr>`; }).join('')}</table></div>`;
   h += `<details style="margin-top:18px"><summary class="muted" style="cursor:pointer">How is this calculated?</summary><div class="card" style="margin-top:8px;font-size:13px;line-height:1.6">
-    <b>Forecast:</b> one LightGBM model trained on 2024–2026 sales of all stores, using recent sales, weekday, month, weather, the festival calendar and price. "Most likely" is its middle (P50) estimate; quiet and busy days are its 10th and 90th percentiles.<br>
-    <b>Chance of waste:</b> ${p.mc_paths} simulated weeks of customer demand drawn from that range; stock is sold oldest-first; we count how often each batch is still left on its last selling day (Monte Carlo).<br>
-    <b>Tonight's order:</b> the quantity with the best expected profit across those simulations, counting sales, waste and a cost for sold-out items, and never below the 60th percentile of tomorrow's demand. "Usual" = recent sales + 15%.<br>
-    <b>Moves:</b> chosen across all stores at once (min-cost flow), only if the stock arrives with selling days left and earns more than a discount. Stock shown is a sample store that ordered every 3 days the usual way.</div></details>`;
+    <b>Forecast:</b> one LightGBM model trained on 2024–2026 sales of all stores, using recent sales, weekday, month, weather, the festival calendar and price; it predicts quiet, likely and busy days for the next week (P10, P50, P90).<br>
+    <b>Order:</b> the quantity with the best expected profit over ${p.mc_paths} simulated weeks of demand, counting sales, waste and a cost for sold-out items, never below the 60th percentile of demand until the next delivery. Usual way = recent sales + 15%.<br>
+    <b>Stock edits:</b> extra units arrive as a fresh batch today; fewer units are removed from the oldest batches first.<br>
+    <b>Gain per day:</b> from the 111-day test, both ways of ordering run on the same customer demand.</div></details>`;
   $('lv-out').innerHTML = h;
 }
+function stockSet(i, v) { const n = Math.max(0, Math.round(+v || 0)); if (n === BASE[i]) delete EDITS[i]; else EDITS[i] = n; renderLive(LVP); }
+function stockStep(i, d) { const cur = EDITS[i] !== undefined ? EDITS[i] : LVP.series[i].on_hand; stockSet(i, cur + d); }
 
 // ======================= TONIGHT'S ORDER =======================
 const dayName = d => new Date(d + 'T00:00:00').toLocaleDateString('en-IN', {weekday: 'short', day: 'numeric', month: 'short'});
@@ -535,18 +508,24 @@ function orderReasons(p, x) {
   const n = x.cycle, out = [];
   const want = x.p50.slice(0, n).reduce((a, b) => a + b, 0), norm = x.normal.slice(0, n).reduce((a, b) => a + b, 0);
   const chg = norm ? Math.round(100 * (want / norm - 1)) : 0;
+  const more = x.order > x.habit * 1.05, less = x.order < x.habit * 0.95;
+  const untilTxt = n === 1 ? 'tomorrow' : `the next ${n} days`;
+  if (x.edited) out.push(`You set the stock to ${fmt(x.edited_to)}.`);
+  if (x.moved_out > 0) out.push(`${fmt(x.moved_out)} units are being moved tonight to other stores that will sell them.`);
   const fest = p.calendar.slice(0, n + 1).find(c => c.fest_name && c.days_to_fest <= 3);
-  if (fest && chg >= 3) out.push(`${fest.fest_name} coming: +${chg}%`);
+  if (fest && chg >= 3) out.push(`${fest.fest_name} is coming, so people will buy about ${chg}% more than usual.`);
   const wet = p.weather.slice(0, n).find(w => w.rain >= 10);
-  if (wet && !out.length && chg >= 3) out.push(`Heavy rain ${dayName(wet.date)}: +${chg}%`);
+  if (wet && chg >= 3 && !fest) out.push(`Heavy rain on ${dayName(wet.date)}: more people order online.`);
+  const hot = p.weather.slice(0, n).find(w => w.temp >= 38);
+  if (hot && !fest && !wet && chg >= 3) out.push(`Very hot on ${dayName(hot.date)}: cold drinks and curd sell more.`);
   const pc = p.price_change[x.cat];
-  if (pc) out.push(`Price ${pc > 0 ? 'up' : 'down'} ${Math.abs(pc)}%`);
-  if (x.order === 0 && x.on_hand > 0) out.push('Enough stock on hand');
-  else if (x.order < x.habit * 0.9 && x.on_hand > 0) out.push(`${fmt(x.on_hand)} already in stock`);
-  const more = x.order > x.habit, less = x.order < x.habit;
-  if (!out.length && Math.abs(chg) >= 3 && ((chg > 0 && more) || (chg < 0 && less))) out.push(`Demand ${chg > 0 ? 'up' : 'down'} ${Math.abs(chg)}% vs a normal day`);
-  if (!out.length && x.order > x.habit * 1.1) out.push('Sold-out hours added back to demand');
-  return out.join(' · ') || '—';
+  if (pc) out.push(pc > 0 ? `Price is ${pc}% higher, so people will buy a little less.` : `Price is ${-pc}% lower, so people will buy more.`);
+  if (x.order === 0 && x.on_hand > 0) out.push(`You already have ${fmt(x.on_hand)} in stock, enough for ${untilTxt}. No need to order.`);
+  else if (less && x.after_moves > 0) out.push(`You will still have ${fmt(x.after_moves)} in stock, so we order less to avoid throwing stock away.`);
+  if (more && !fest && !wet && !hot && !pc) out.push('This item sold out on some recent evenings, so real demand is higher than the sales show.');
+  if (!out.length && less && chg <= -3) out.push(`People are expected to buy about ${-chg}% less than usual.`);
+  if (!out.length) out.push('Same as usual.');
+  return out.join(' ');
 }
 function orderRows(p) {
   const f = flt(), q = ($('or-q').value || '').trim();
@@ -580,6 +559,9 @@ function renderOrder(p) {
         <div class="metric">Each item ordered to last until its next delivery</div></div>
       <div class="card"><div class="lbl">Order value (at cost)</div><div class="kpi">${rs(value)}</div><div class="sub">${fmt(skipped.length)} item${skipped.length === 1 ? '' : 's'} need no order tonight</div>
         <div class="metric">Purchase cost = 70% of selling price</div></div>
+      <div class="card good"><div class="lbl">Money vs the usual way</div><div class="kpi">${rs(rows.reduce((t, r) => t + (r.gain_day || 0), 0))}/day</div>
+        <div class="sub">${rows.filter(r => (r.gain_day || 0) > 0.5).length} items earn more, ${rows.filter(r => (r.gain_day || 0) < -0.5).length} earn less</div>
+        <div class="metric">Measured over 111 days with both ways of ordering on the same customer demand</div></div>
       <div class="card good"><div class="lbl">Waste avoided by this order</div><div class="kpi">${fmt(Math.max(0, Math.round(wH - wU)))} units</div>
         <div class="sub">${rs(wRs)} kept · likely waste ${fmt(Math.round(wU))} vs ${fmt(Math.round(wH))} the usual way</div>
         <div class="metric">Units from this delivery likely to expire unsold, vs ordering the usual way</div></div>
@@ -588,10 +570,10 @@ function renderOrder(p) {
       <span><span class="chg less">−20%</span> ordering less than usual</span><span><span class="chg more">+20%</span> ordering more</span>
       <span><span style="display:inline-block;width:40px;height:8px;background:#2B59F3;border-radius:4px"></span> our order &nbsp;<span style="display:inline-block;width:2px;height:12px;background:#14171F"></span> usual order</span>
       ${['dairy', 'bakery', 'eggs_meat', 'vegetables', 'fruits'].map(c => `<span class="cat ${c}">${CAT[c]}</span>`).join(' ')}</div>
-    <div class="scroll" style="max-height:none"><table><tr><th>Item</th>${many ? '<th>Store</th>' : ''}<th>Order tonight</th><th style="width:170px">Our order vs usual</th><th>Change</th><th>Delivery</th><th>Lasts until</th><th>Customers will want</th><th>In stock</th><th>Why</th></tr>`;
+    <div class="scroll" style="max-height:none"><table><tr><th>Item</th>${many ? '<th>Store</th>' : ''}<th>Order tonight</th><th style="width:170px">Our order vs usual</th><th>Change</th><th>Delivery</th><th>Lasts until</th><th>Customers will want</th><th>In stock</th><th>Money vs usual way <span class="vs">(per day, 111-day test)</span></th><th style="text-align:left">Why</th></tr>`;
   let lastCat = null;
   ordered.forEach(r => {
-    if (sk === 'cat' && r.cat !== lastCat) { h += `<tr class="catrow"><td colspan="${many ? 10 : 9}">${CAT[r.cat]}</td></tr>`; lastCat = r.cat; }
+    if (sk === 'cat' && r.cat !== lastCat) { h += `<tr class="catrow"><td colspan="${many ? 11 : 10}">${CAT[r.cat]}</td></tr>`; lastCat = r.cat; }
     const small = r.habit < 5, dU = r.order - r.habit;
     const cls = small ? (dU <= -2 ? 'less' : dU >= 2 ? 'more' : 'same') : (r.diff <= -10 ? 'less' : r.diff >= 10 ? 'more' : 'same');
     h += `<tr><td><span class="cat ${r.cat}" title="${CAT[r.cat]}">&nbsp;</span> <b>${r.item}</b></td>${many ? `<td>${r.store}</td>` : ''}
@@ -599,7 +581,9 @@ function renderOrder(p) {
       <td><div class="qbar"><i style="width:${100 * r.order / maxQ}%"></i><b style="left:${100 * r.habit / maxQ}%"></b></div><span class="vs">usual ${fmt(r.habit)}</span></td>
       <td><span class="chg ${cls}">${r.habit < 5 ? (r.order - r.habit > 0 ? '+' : r.order - r.habit < 0 ? '−' : '') + Math.abs(r.order - r.habit) + ' units' : (r.diff > 0 ? '+' : r.diff < 0 ? '−' : '') + Math.abs(r.diff) + '%'}</span></td>
       <td>${r.cycle === 1 ? 'Daily' : `Every ${r.cycle} days`}</td><td>${dayName(r.until)}</td>
-      <td>${fmt(Math.round(r.want))} <span class="vs">over ${r.cycle} day${r.cycle > 1 ? 's' : ''}</span></td><td>${fmt(r.on_hand)}</td><td class="muted">${r.why}</td></tr>`;
+      <td>${fmt(Math.round(r.want))} <span class="vs">over ${r.cycle} day${r.cycle > 1 ? 's' : ''}</span></td><td>${fmt(r.on_hand)}</td>
+      <td>${r.gain_day === null || r.gain_day === undefined ? '—' : `<span class="chg ${r.gain_day > 0.5 ? 'less' : r.gain_day < -0.5 ? 'more' : 'same'}">${r.gain_day > 0.5 ? '+' : r.gain_day < -0.5 ? '−' : ''}₹${fmt(Math.abs(Math.round(r.gain_day)))}</span>`}</td>
+      <td style="max-width:300px;font-size:13px;text-align:left;line-height:1.35">${r.why}</td></tr>`;
   });
   h += `</table></div>`;
   if (skipped.length) h += `<h2>Not ordering tonight</h2><p class="muted">Stock on hand already covers these until their next delivery.</p><div class="row" style="gap:8px">${
@@ -609,9 +593,9 @@ function renderOrder(p) {
 }
 function orderCSV() {
   const p = LVP, rows = window._orderRows || [];
-  const head = ['delivery_date', 'store', 'item', 'category', 'order_units', 'usual_units', 'delivery_cycle_days', 'lasts_until', 'expected_demand', 'in_stock', 'reason'];
+  const head = ['delivery_date', 'store', 'item', 'category', 'order_units', 'usual_units', 'delivery_cycle_days', 'lasts_until', 'expected_demand', 'in_stock', 'gain_per_day_rs', 'reason'];
   const esc = v => `"${String(v).replace(/"/g, '""')}"`;
-  const lines = [head.join(',')].concat(rows.map(r => [p.days[0], r.store, r.item, CAT[r.cat], r.order, r.habit, r.cycle, r.until, Math.round(r.want), r.on_hand, r.why].map(esc).join(',')));
+  const lines = [head.join(',')].concat(rows.map(r => [p.days[0], r.store, r.item, CAT[r.cat], r.order, r.habit, r.cycle, r.until, Math.round(r.want), r.on_hand, Math.round(r.gain_day || 0), r.why].map(esc).join(',')));
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([lines.join('\n')], {type: 'text/csv'}));
   a.download = `order_${(flt().store || 'all_stores').replace(/\s+/g, '_')}_${p.days[0]}.csv`;

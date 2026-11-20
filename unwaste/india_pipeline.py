@@ -235,7 +235,10 @@ def run(fast: bool = False, delivery_days: int = 3) -> dict:
     tail_stock = [[Batch(b.qty, b.sellby - off, b.arrival - off, b.uid) for b in st if b.qty > 0] for st in stock]
     last = d[d["dt"] == dates[-1]].sort_values("series_id")
     clim = d.drop_duplicates("dt").assign(doy=lambda x: x["dt"].dt.dayofyear)[["doy", "rain", "temp", "humidity", "wind"]]
-    state = {"models": F_live["models"], "features": F_live["features"], "codes": F_live["codes"],
+    gain_day = (ledgers["unwaste"].net_s - ledgers["baseline"].net_s) / max(test_days, 1)
+    state = {"gain_day": gain_day, "waste_s": {k: ledgers[k].waste_s for k in ("baseline", "unwaste")},
+             "test_days": test_days,
+             "models": F_live["models"], "features": F_live["features"], "codes": F_live["codes"],
              "Y_tail": Y[:, off:], "S_tail": S_obs[:, off:], "dates_tail": dates[off:], "meta": meta,
              "stock": tail_stock, "price_idx": last["price_idx"].to_numpy(), "cfg": cfg_live,
              "climate": clim.groupby("doy").mean().to_dict("index"), "last_weather":

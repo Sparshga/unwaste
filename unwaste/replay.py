@@ -62,6 +62,8 @@ class Ledger:
     penalty_frac: float = 0.5
     actions: list = field(default_factory=list)
     final_stock: list | None = None   # batches on hand at the end (live demo starts from here)
+    net_s: object = None              # per-series net after lost-sale cost (same accounting as summary)
+    waste_s: object = None
 
     def summary(self) -> dict:
         # stock still on the shelf at the end is valued at cost, so ordering more isn't penalised unfairly
@@ -104,6 +106,7 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
         by_product[p].append(s)
 
     led = Ledger(penalty_frac=cfg.lost_sale_penalty_frac)
+    led.net_s, led.waste_s = np.zeros(nS), np.zeros(nS)
     stock: list[list[Batch]] = [[] for _ in range(nS)]
     markdown_until = np.full(nS, -1)
     open_moves = []                                     # (sender, until_day, units)
@@ -115,6 +118,7 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
         stock[s].append(Batch(q, t0 + sell_days[s] - 1, t0, f"{s}-init"))
         led.received += q
         led.purchase += q * unit_cost[s]
+        led.net_s[s] -= q * unit_cost[s]
 
     for t in range(t0, T):
         lost_today[:] = 0
@@ -141,6 +145,7 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
                 sold += take
                 disc = cfg.late_markdown_frac if (units_only and late_today and md == 0 and b.sellby == t) else md
                 led.revenue += take * price[s] * (1 - disc)
+                led.net_s[s] += take * price[s] * (1 - disc)
                 if sold >= want:
                     break
             led.demand += base_want
@@ -148,12 +153,15 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
             lost_today[s] = max(0, base_want - sold)
             led.lost_units += lost_today[s]
             led.lost_value += lost_today[s] * price[s]
+            led.net_s[s] -= led.penalty_frac * lost_today[s] * price[s]
             # expire anything at its sell-by line tonight
             keep = []
             for b in stock[s]:
                 if b.sellby <= t and b.arrival <= t:
                     led.waste += b.qty
                     led.salvage += b.qty * cfg.salvage_per_unit
+                    led.net_s[s] += b.qty * cfg.salvage_per_unit
+                    led.waste_s[s] += b.qty
                 else:
                     keep.append(b)
             stock[s] = keep
@@ -172,6 +180,7 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
         if t == T - 1:
             for s in range(nS):
                 led.ending_stock_value += sum(b.qty for b in stock[s]) * unit_cost[s]
+                led.net_s[s] += sum(b.qty for b in stock[s]) * unit_cost[s]
             led.final_stock = stock
             break
 
@@ -198,6 +207,7 @@ def run_policy(policy: Policy, D: np.ndarray, S_obs: np.ndarray, F: dict | None,
                 stock[s].append(Batch(q, arrival + sell_days[s] - 1, arrival, f"{s}-d{arrival}"))
                 led.received += q
                 led.purchase += q * unit_cost[s]
+                led.net_s[s] -= q * unit_cost[s]
     return led
 
 
@@ -257,6 +267,10 @@ def _nightly_actions(t, stock, F, meta, by_product, markdown_until, open_moves, 
             stock[j].append(Batch(x, b.sellby, t + cfg.transfer_days, f"{b.uid}->{j}"))
             led.transfer_units += x
             led.transfer_cost += x * cfg.transfer_cost_per_unit
+            if led.net_s is not None:
+                c_i = cfg.cost_ratio * float(meta["price"].iloc[i])
+                led.net_s[i] += x * (c_i - cfg.transfer_cost_per_unit)
+                led.net_s[j] -= x * c_i
             open_moves.append((i, b.sellby, x))
             if log_actions:
                 led.actions.append(_log(t, i, meta, info[i], "transfer", x, j,

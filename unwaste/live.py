@@ -191,6 +191,27 @@ def predict(inputs: dict) -> dict:
     stock = copy.deepcopy(_sample_stock(STATE.stat().st_mtime) if sample else st["stock"])
     T = st["Y_tail"].shape[1]
     t = T - 1
+    edits = {}
+    for k_, v_ in (inputs.get("stock_edits") or {}).items():
+        try:
+            s_, new = int(k_), max(0, int(round(float(v_))))
+        except (TypeError, ValueError):
+            continue
+        if not 0 <= s_ < len(meta):
+            continue
+        cur_q = sum(b.qty for b in stock[s_] if b.qty > 0)
+        if new > cur_q:
+            sd = int(meta["sellable_days"].iloc[s_])
+            stock[s_].append(Batch(new - cur_q, t + sd - 1, t, f"{s_}-edit"))
+        elif new < cur_q:
+            cut = cur_q - new
+            for b in sorted([b for b in stock[s_] if b.qty > 0], key=lambda b: (b.sellby, b.arrival)):
+                take = min(b.qty, cut)
+                b.qty -= take
+                cut -= take
+                if cut == 0:
+                    break
+        edits[s_] = new
     Ffull = {q: np.zeros((len(meta), T, H)) for q in F}
     for q in F:
         Ffull[q][:, t, :] = F[q]
@@ -210,6 +231,7 @@ def predict(inputs: dict) -> dict:
                             "days_left": int(b.sellby - t), "p_leftover": round(r["p_leftover"], 2),
                             "exp_leftover": round(r["exp_leftover"], 1), "hist": r["hist"], "price": float(meta["price"].iloc[s]),
                             "demand_next": round(float(F[0.5][s, 0]), 1), "action": "ok"})
+    on_hand_now = np.array([sum(b.qty for b in stock[s] if b.qty > 0) for s in range(len(meta))])
     led = Ledger()
     by_product = {}
     for s, p in enumerate(meta["product_id"].to_numpy()):
@@ -229,7 +251,8 @@ def predict(inputs: dict) -> dict:
 
     # KPI: expected waste from tonight's order and lost sales tomorrow, Unwaste vs habit (same demand paths)
     rng_k = np.random.default_rng(cfg.seed + 2)
-    waste_u, waste_h, lost_u, lost_h = (np.zeros(len(meta)) for _ in range(4))
+    waste_u, waste_h, lost_u, lost_h, gain = (np.zeros(len(meta)) for _ in range(5))
+    cyc = meta["review_days"].to_numpy() if "review_days" in meta.columns else np.full(len(meta), cfg.review_period_days)
     for s in range(len(meta)):
         paths = np.round(sample_from_quantiles(F[0.1][s], F[0.5][s], F[0.9][s], cfg.mc_paths, rng_k))
         cur = [Batch(b.qty, b.sellby, b.arrival) for b in stock[s] if b.qty > 0]
@@ -237,7 +260,10 @@ def predict(inputs: dict) -> dict:
             nb = Batch(int(q), t + int(sell_days[s]), t + 1)
             sim = simulate_fefo(cur + [nb], paths, t + 1)
             wv[s] = float(sim["leftover"][:, -1].mean()) if q > 0 else 0.0
-            lv[s] = float(sim["lost_by_day"][:, 0].mean())
+            lv[s] = float(sim["lost_by_day"][:, :int(cyc[s])].sum(axis=1).mean())
+        unit_cost = cfg.cost_ratio * price[s]
+        lost_cost = price[s] - unit_cost + cfg.lost_sale_penalty_frac * price[s]
+        gain[s] = (waste_h[s] - waste_u[s]) * (unit_cost - cfg.salvage_per_unit) - (lost_u[s] - lost_h[s]) * lost_cost
 
     # per item, all stores
     df = pd.DataFrame({"item": meta["product_id"], "category": meta["cat"], "store": meta["store_id"],
@@ -282,17 +308,24 @@ def predict(inputs: dict) -> dict:
         "items": json.loads(items.round(1).to_json(orient="records")), "actions": acts,
         "batches": batches[:400], "n_batches": len(batches), "stores": sorted(meta["store_id"].unique()),
         "series": [{"store": meta["store_id"].iloc[s], "item": meta["product_id"].iloc[s], "cat": meta["cat"].iloc[s],
-                    "shelf": int(meta["shelf_life"].iloc[s]), "order": int(orders[s]), "on_hand": int(on_hand[s]),
+                    "shelf": int(meta["shelf_life"].iloc[s]), "order": int(orders[s]), "on_hand": int(on_hand_now[s]),
+                    "after_moves": int(on_hand[s]),
                     "habit": int(habit[s]), "price": float(price[s]),
                     "cycle": int(meta["review_days"].iloc[s]) if "review_days" in meta.columns else int(cfg.review_period_days),
                     "cost": round(float(cfg.cost_ratio * price[s]), 2),
                     "waste_u": round(waste_u[s], 1), "waste_h": round(waste_h[s], 1),
+                    "gain_day": round(float(st["gain_day"][s]), 1) if "gain_day" in st else None,
+                    "edited": s in edits, "edited_to": edits.get(s),
+                    "moved_out": int(sum(a["units"] for a in led.actions if a["action"] == "transfer" and a["series"] == s)),
+                    "oldest_sellby": str((st["dates_tail"][0] + pd.Timedelta(days=int(min((b.sellby for b in stock[s] if b.qty > 0), default=t)))).date())
+                                     if on_hand[s] > 0 else "",
                     "lost_u": round(lost_u[s], 1), "lost_h": round(lost_h[s], 1),
                     "normal": np.round(F0[0.5][s], 1).tolist(), "p10": np.round(F[0.1][s], 1).tolist(),
                     "p50": np.round(F[0.5][s], 1).tolist(), "p90": np.round(F[0.9][s], 1).tolist()}
                    for s in range(len(meta))],
         "service_floor": cfg.service_floor, "mc_paths": cfg.mc_paths,
         "calendar": cal, "weather": wx, "price_change": inputs.get("price_change") or {},
+        "test_days": st.get("test_days"),
         "stock_source": "sample: a store that orders every 3 days by habit (simulated, last 3 weeks)" if sample
                         else "Unwaste's own daily-ordering stock from the replay",
     }
