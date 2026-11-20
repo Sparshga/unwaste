@@ -22,7 +22,7 @@ import pandas as pd
 
 from .backends import backend_names
 from .config import default_config
-from .forecast import fit_forecast, to_matrix
+from .forecast import fit_forecast, temp_change, to_matrix
 from .data import Panel
 from .impute import correct_demand, demand_truth_test
 from .india_data import FESTIVALS, OPEN, OUT as DATA_DIR
@@ -52,6 +52,9 @@ def panel(df: pd.DataFrame, cfg, delivery_days: int = 3):
     d["store_id"], d["product_id"] = d["store_name"], d["item"]       # readable names everywhere
     d["series_id"] = d.groupby(["store_id", "product_id"], sort=True).ngroup()
     d["activity"] = 0.0
+    day_t = d.drop_duplicates("dt").set_index("dt")["temp"].sort_index()
+    for name, v in temp_change(day_t.to_numpy()).items():
+        d[name] = d["dt"].map(pd.Series(v, index=day_t.index)).fillna(0.0)
     hr = df.attrs["hourly"]
     meta = d.groupby("series_id").agg(store_id=("store_id", "first"), product_id=("product_id", "first"),
                                       cat=("category", "first"), price=("base_price", "first"),
@@ -65,7 +68,25 @@ def panel(df: pd.DataFrame, cfg, delivery_days: int = 3):
     # step 1, exactly as on FreshRetailNet: a model trained only on in-stock hours fills the empty ones
     corrected, daily = correct_demand(pnl, cfg)
     d["demand"] = daily.to_numpy()
+    meta["beta_cold"], meta["beta_heat"] = weather_sensitivity(d)
+    d["cold_x"] = d["cold_delta"] * d["series_id"].map(meta["beta_cold"])
+    d["heat_x"] = d["heat_delta"] * d["series_id"].map(meta["beta_heat"])
     return d, meta, pnl, corrected
+
+
+def weather_sensitivity(d: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """How much each item's demand moved, relative to its last 14 days, per degree colder or hotter
+    than those 14 days. Measured on the training period only, pooled over stores."""
+    tr = d[d["dt"] < pd.Timestamp(TEST_START)].sort_values(["series_id", "dt"])
+    prev = tr.groupby("series_id")["demand"].transform(lambda v: v.shift(1).rolling(14, min_periods=7).mean())
+    tr = tr.assign(r=tr["demand"] / prev - 1).replace([np.inf, -np.inf], np.nan).dropna(subset=["r"])
+    by_item = {}
+    for item, g in tr.groupby("product_id"):
+        X = np.c_[g["cold_delta"], g["heat_delta"], np.ones(len(g))]
+        by_item[item] = np.clip(np.linalg.lstsq(X, g["r"].clip(-1, 2), rcond=None)[0][:2], -0.1, 0.1)
+    items = d.groupby("series_id")["product_id"].first().sort_index()
+    b = np.array([by_item.get(i, (0.0, 0.0)) for i in items])
+    return b[:, 0], b[:, 1]
 
 
 def _wape(P, Y, te, mask=None):
@@ -241,6 +262,8 @@ def run(fast: bool = False, delivery_days: int = 3) -> dict:
              "models": F_live["models"], "features": F_live["features"], "codes": F_live["codes"],
              "Y_tail": Y[:, off:], "S_tail": S_obs[:, off:], "dates_tail": dates[off:], "meta": meta,
              "stock": tail_stock, "price_idx": last["price_idx"].to_numpy(), "cfg": cfg_live,
+             "beta_cold": meta["beta_cold"].to_numpy(), "beta_heat": meta["beta_heat"].to_numpy(),
+             "temp_hist": d.drop_duplicates("dt").sort_values("dt")["temp"].to_numpy()[-14:],
              "climate": clim.groupby("doy").mean().to_dict("index"), "last_weather":
                  last[["rain", "temp", "humidity", "wind"]].iloc[0].to_dict(), "built": time.strftime("%Y-%m-%d %H:%M")}
     STATE.parent.mkdir(parents=True, exist_ok=True)

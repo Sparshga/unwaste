@@ -103,7 +103,6 @@
       <div class="lv">
         <div><label>Temperature °C</label><input id="lv-temp" type="number" step="0.1"></div>
         <div><label>Rain mm</label><input id="lv-rain" type="number" step="0.1" min="0"></div>
-        <div><label>Humidity %</label><input id="lv-hum" type="number" step="1" min="0" max="100"></div>
         <div><label>Festival / holiday</label><select id="lv-fest"></select></div>
         <div><label>How big?</label><select id="lv-size"><option value="1">Major festival</option><option value="0.5">Small festival</option></select></div>
         <div><label>Change price of</label><select id="lv-pcat"></select></div>
@@ -378,12 +377,15 @@ async function liveInit() {
   $('lv-pcat').innerHTML = '<option value="">nothing</option>' + LV.categories.map(c => `<option value="${c}">${CAT[c] || c}</option>`).join('');
   const prefill = () => {
     const i = 0, w = LV.weather[i], c = LV.calendar[i];
-    $('lv-temp').value = w.temp; $('lv-rain').value = w.rain; $('lv-hum').value = w.humidity;
+    $('lv-temp').value = w.temp; $('lv-rain').value = w.rain;
     const auto = c.fest_name ? `From calendar: ${c.fest_name}${c.days_to_fest ? ' in ' + c.days_to_fest + ' day' + (c.days_to_fest > 1 ? 's' : '') : ' (that day)'}` : 'From calendar: none this week';
     $('lv-fest').innerHTML = `<option value="auto">${auto}</option><option value="none">No festival</option>` +
       LV.fest_types.filter(t => t !== 'none').map(t => `<option value="${t}">${FEST[t] || t} on this day</option>`).join('');
   };
   prefill();
+  const sizeOn = () => { const on = !['auto', 'none'].includes($('lv-fest').value); $('lv-size').disabled = !on;
+    $('lv-size').title = on ? '' : 'Pick a festival on the left to set its size; calendar festivals already have their size'; };
+  $('lv-fest').onchange = sizeOn; sizeOn();
   $('lv-src').textContent = `Planning for ${dayName(LV.days[0])}, the day after the latest sales (${LV.last_day}). Weather: ${LV.weather_source.startsWith('Open') ? 'live forecast for Gurugram' : 'usual weather for these dates (offline)'}. You can type your own.`;
   $('lv-go').onclick = liveRun;
   $('lv-reset').onclick = () => { EDITS = {}; liveRun(); };
@@ -392,7 +394,7 @@ async function liveInit() {
 async function liveRun() {
   const cat = $('lv-pcat').value, pct = $('lv-pct').value;
   const body = {target: LV.days[0],
-    weather: {temp: $('lv-temp').value, rain: $('lv-rain').value, humidity: $('lv-hum').value},
+    weather: {temp: $('lv-temp').value, rain: $('lv-rain').value},
     festival: {type: $('lv-fest').value, size: parseFloat($('lv-size').value)},
     price_change: cat && pct !== '' ? {[cat]: parseFloat(pct)} : {}, stock_edits: EDITS};
   $('lv-msg') && ($('lv-msg').innerHTML = '<span class="muted">Updating…</span>');
@@ -476,9 +478,18 @@ function renderLive(p) {
   const fest = fe.fest_name ? `${fe.fest_name} ${fe.days_to_fest ? 'in ' + fe.days_to_fest + ' day(s)' : 'that day'}` : 'no festival';
   const nEdit = Object.keys(EDITS).length;
   const gainDay = S.reduce((t, x) => t + (x.gain_day || 0), 0);
+  const byItem = {};
+  S.forEach(x => { const b = byItem[x.item] || (byItem[x.item] = [0, 0]); b[0] += x.p50[0]; b[1] += x.normal[0]; });
+  const dNow = sum(S.map(x => ({v: x.p50[0]})), 'v'), dNorm = sum(S.map(x => ({v: x.normal[0]})), 'v');
+  const movers = Object.entries(byItem).filter(([, b]) => b[1] > 1 && Math.abs(b[0] - b[1]) >= 1)
+    .sort((x, y) => Math.abs(y[1][0] - y[1][1]) - Math.abs(x[1][0] - x[1][1])).slice(0, 3)
+    .map(([k, b]) => [k, 100 * (b[0] / b[1] - 1)]);
+  const pct = v => Math.abs(v) < 0.5 ? 'same' : (v > 0 ? '+' : '−') + Math.abs(v).toFixed(0) + '%';
+  const demandLine = dNorm > 0 ? `Expected demand on ${dayName(p.target)} vs a normal day (usual weather, no festival): <b>${pct(100 * (dNow / dNorm - 1))}</b>${
+    movers.length ? ' · biggest changes: ' + movers.map(([k, v]) => `${k} ${pct(v)}`).join(', ') : ''}<br>` : '';
   let h = `<div class="card" id="lv-msg" style="border-left:5px solid #1C7C3A">
       <b>Updated${UPDATED ? ' at ' + UPDATED.toLocaleTimeString('en-IN', {hour: '2-digit', minute: '2-digit'}) : ''}</b> · ${filterLabel(f)} · ${w.temp}°C, ${w.rain} mm rain, ${fest}${nEdit ? ` · ${nEdit} stock edit${nEdit > 1 ? 's' : ''}` : ''}<br>
-      Tonight's order <b>${fmt(sum(S, 'order'))} units</b> (usual way ${fmt(sum(S, 'habit'))}) · <b>${fmt(moved)}</b> units to move · <b>${acts.filter(a => a.action === 'markdown').length}</b> discounts
+      ${demandLine}Tonight's order <b>${fmt(sum(S, 'order'))} units</b> (usual way ${fmt(sum(S, 'habit'))}) · <b>${fmt(moved)}</b> units to move · <b>${acts.filter(a => a.action === 'markdown').length}</b> discounts
       ${gainDay ? ` · Unwaste earns <b>${rs(gainDay)}/day</b> more than the usual way for these items (111-day test)` : ''}
       <div class="row" style="gap:10px;margin-top:10px"><button class="go" onclick="document.querySelector('nav button[data-tab=order]').click()">See tonight's order →</button>
       <button class="go ghost" onclick="document.querySelector('nav button[data-tab=iact]').click()">See store actions →</button></div></div>`;
@@ -493,7 +504,7 @@ function renderLive(p) {
           <button class="go ghost" style="padding:4px 12px" onclick="stockStep(${x.idx}, 1)">+</button>
           ${EDITS[x.idx] !== undefined ? `<span class="vs"> originally ${fmt(BASE[x.idx])}</span>` : ''}</td></tr>`; }).join('')}</table></div>`;
   h += `<details style="margin-top:18px"><summary class="muted" style="cursor:pointer">How is this calculated?</summary><div class="card" style="margin-top:8px;font-size:13px;line-height:1.6">
-    <b>Forecast:</b> one LightGBM model trained on 2024–2026 sales of all stores, using recent sales, weekday, month, weather, the festival calendar and price; it predicts quiet, likely and busy days for the next week (P10, P50, P90).<br>
+    <b>Forecast:</b> one LightGBM model trained on 2024–2026 sales of all stores, using recent sales, weekday, month, weather (including how much warmer or colder the day is than the last two weeks, and how strongly each item reacted to that in the past), the festival calendar and price; it predicts quiet, likely and busy days for the next week (P10, P50, P90).<br>
     <b>Order:</b> the quantity with the best expected profit over ${p.mc_paths} simulated weeks of demand, counting sales, waste and a cost for sold-out items, never below the 60th percentile of demand until the next delivery. Usual way = recent sales + 15%.<br>
     <b>Stock edits:</b> extra units arrive as a fresh batch today; fewer units are removed from the oldest batches first.<br>
     <b>Gain per day:</b> from the 111-day test, both ways of ordering run on the same customer demand.</div></details>`;

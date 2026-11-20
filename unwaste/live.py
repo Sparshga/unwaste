@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from .decide import baseline_order, newsvendor_order
-from .forecast import WEATHER, _build_rows
+from .forecast import WEATHER, WX_CHANGE, WX_ITEM, _build_rows, temp_change
 from .india_data import FEST_TYPES, FESTIVALS
 from .replay import POLICIES, Ledger, _nightly_actions, run_policy
 from .risk import Batch, batch_risk, simulate_fefo
@@ -125,10 +125,16 @@ def _forecast(st, wx: list[dict], cal: list[dict], price_idx: np.ndarray, discou
     S, T = Y.shape
     meta = st["meta"]
     fut = {c: np.zeros((S, H)) for c in ["discount", "holiday", "activity", "days_to_fest", "fest_weight",
-                                         "fest_type_code", "price_idx"] + WEATHER}
+                                         "fest_type_code", "price_idx"] + WEATHER + WX_CHANGE + WX_ITEM}
+    hist = list(st.get("temp_hist", [wx[0]["temp"]] * 14))
+    chg = temp_change(hist + [wx[h]["temp"] for h in range(H)])
     for h in range(H):
         for w in WEATHER:
             fut[w][:, h] = wx[h][w]
+        for c in WX_CHANGE:
+            fut[c][:, h] = chg[c][len(hist) + h]
+        fut["cold_x"][:, h] = chg["cold_delta"][len(hist) + h] * st.get("beta_cold", np.zeros(S))
+        fut["heat_x"][:, h] = chg["heat_delta"][len(hist) + h] * st.get("beta_heat", np.zeros(S))
         fut["holiday"][:, h] = cal[h]["holiday"]
         fut["days_to_fest"][:, h] = cal[h]["days_to_fest"]
         fut["fest_weight"][:, h] = cal[h]["fest_weight"]

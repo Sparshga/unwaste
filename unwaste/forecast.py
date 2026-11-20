@@ -32,11 +32,25 @@ WEATHER = ["rain", "temp", "humidity", "wind"]
 FEST = ["days_to_fest", "fest_weight"]   # from the public festival calendar, known weeks ahead
 INDIA = ["fest_type_code", "price_idx"]  # festival kind + the item's own price vs normal (Unwaste-India)
 CAL = ["month", "dom"]                   # month and day of month of the target day (yearly data only)
+WX_CHANGE = ["temp_delta", "cold_delta", "heat_delta"]   # the target day vs the 14 days before it
+WX_ITEM = ["cold_x", "heat_x"]           # the same change times how strongly this item reacted in training
+
+
+def temp_change(temps) -> dict:
+    """Per day: temperature, heating degrees (below 18 C) and cooling degrees (above 24 C), each minus
+    its average over the previous 14 days. Demand is forecast relative to the last 14 days of sales,
+    so the model needs to know how the weather differs from those days, not just today's weather."""
+    t = np.asarray(temps, float)
+    out = {}
+    for name, v in (("temp_delta", t), ("cold_delta", np.clip(18 - t, 0, None)), ("heat_delta", np.clip(t - 24, 0, None))):
+        prev = pd.Series(v).shift(1).rolling(14, min_periods=1).mean().to_numpy()
+        out[name] = np.nan_to_num(v - prev)
+    return out
 
 
 def exo_matrices(daily: pd.DataFrame) -> dict:
     out = {}
-    for c in ["discount", "holiday", "activity"] + [w for w in WEATHER + FEST + INDIA if w in daily.columns]:
+    for c in ["discount", "holiday", "activity"] + [w for w in WEATHER + FEST + INDIA + WX_CHANGE + WX_ITEM if w in daily.columns]:
         out[c] = daily.pivot_table(index="series_id", columns="dt", values=c, aggfunc="mean") \
             .sort_index().sort_index(axis=1).fillna(0).to_numpy()
     return out
@@ -74,7 +88,7 @@ def _build_rows(Y, exo, dates, origins, H, series_codes, exo_future=None, calend
                    "same_dow": sd,
                    "discount": ex("discount"), "holiday": ex("holiday"),
                    "activity": ex("activity"),
-                   **{w: ex(w) for w in WEATHER + FEST + INDIA if w in exo},
+                   **{w: ex(w) for w in WEATHER + FEST + INDIA + WX_CHANGE + WX_ITEM if w in exo},
                    "store": series_codes[0], "product": series_codes[1],
                    "series": np.arange(S), "origin": np.full(S, o),
                    "target": Y[:, t] if t < T else np.full(S, np.nan)}
@@ -125,6 +139,10 @@ def fit_forecast(Y: np.ndarray, daily: pd.DataFrame, cfg: Config, label: str = "
             feats = feats + ["fest_type_code"]
     if "price_idx" in train.columns:
         feats = feats + ["price_idx"]
+    if cfg.use_weather and all(c in train.columns for c in WX_CHANGE):
+        feats = feats + WX_CHANGE
+    if cfg.use_weather and all(c in train.columns for c in WX_ITEM):
+        feats = feats + WX_ITEM
     if cal:
         feats = feats + CAL
     if cfg.relative_target:
