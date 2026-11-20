@@ -328,9 +328,12 @@ function renderIMain(m) {
     <p class="muted">Shaded = festival days. The 7-day average reacts after the surge; Unwaste sees it coming from the calendar.</p></div>`;
   if (f.per_festival.length) h += `<h2>Each festival in the test window</h2><table><tr><th>Festival</th><th>Date</th><th>Unwaste</th><th>No calendar</th><th>7-day average</th></tr>${
     f.per_festival.map(x => `<tr><td>${x.festival}</td><td>${x.date}</td><td><b>${x.ours}%</b></td><td>${x.no_calendar}%</td><td>${x.avg_7d}%</td></tr>`).join('')}</table>`;
-  h += `<h2>Hidden demand on empty-shelf days</h2><div class="row">
-      ${kpi(m.fill_in.stockout_days_pct + '%', 'of store-item-days had an empty shelf for some hours')}
-      ${kpi(m.fill_in.error_sales_as_demand + '% → ' + m.fill_in.error_filled + '%', 'error vs true demand on those days: sales as-is → filled in', 'good')}</div>
+  const fi = m.fill_in, dtt = fi.demand_truth;
+  h += `<h2>Hidden demand when the shelf is empty</h2><div class="row">
+      ${kpi(fi.stockout_days_pct + '%', `of store-item-days ran out${fi.typical_start_hour !== undefined ? ', usually from ' + fi.typical_start_hour + ':00' : ''}`)}
+      ${fi.hour_error_model !== undefined ? kpi(fi.hour_error_sales + '% → ' + fi.hour_error_model + '%', `error on empty hours vs true demand: sales as-is → our model (simple average: ${fi.hour_error_average}%)`, 'good') : ''}
+      ${kpi(fi.error_sales_as_demand + '% → ' + fi.error_filled + '%', 'error on whole stockout days: sales as-is → filled in', 'good')}</div>
+    ${dtt ? `<p class="muted">Demand-truth test, same as on FreshRetailNet: we hide ${fmt(dtt.hidden_blocks)} afternoon blocks on full-stock days and ask for them back. Error: zeros ${Math.round(100 * dtt.wape_naive_zero)}%, simple average ${Math.round(100 * dtt.wape_series_average)}%, our model ${Math.round(100 * dtt.wape_model)}%.</p>` : ''}
     <h2>Replay: the same true demand, four ways of ordering</h2>
     <table><tr><th>Policy</th><th>Waste %</th><th>Service %</th><th>Net after lost-sale cost</th><th>Units moved</th><th>Shelf-life breaches</th></tr>${
       ['baseline', 'forecast_raw', 'forecast_corrected', 'unwaste'].filter(k => r[k]).map(k => `<tr class="${k === 'unwaste' ? 'win' : ''}"><td>${r[k].label}</td><td>${r[k].waste_pct_of_received}%</td><td>${r[k].service_level_pct}%</td><td>${rs(r[k].net_after_lost_sales_rs)}</td><td>${fmt(r[k].transfer_units || 0)}</td><td>${r[k].shelf_life_breaches ?? 0}</td></tr>`).join('')}</table>

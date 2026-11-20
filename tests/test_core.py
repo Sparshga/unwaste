@@ -102,12 +102,18 @@ def test_align_weather_shifts_year():
 
 
 def test_india_dataset_small():
+    import numpy as np
+    import pandas as pd
+    from pathlib import Path
     from unwaste.india_data import festival_features, generate
-    df = generate(end="2024-01-31", folder=__import__("pathlib").Path("does-not-exist"))
-    assert len(df) == 10 * 32 * 31
-    assert (df["sales"] <= df["demand_true"]).all()
+    df = generate(end="2024-01-31", folder=Path("does-not-exist"))
+    hr = df.attrs["hourly"]
+    assert len(df) == 10 * 32 * 31 and hr["hs"].shape == (len(df), 24)
+    assert (hr["hs"] <= hr["hd"]).all() and (df["sales"].to_numpy() == hr["hs"].sum(axis=1)).all()
+    assert (df["stockout_hours"].to_numpy() == hr["oos"].sum(axis=1)).all()
+    assert hr["oos"][:, :6].sum() == 0                                   # closed before 6:00
     assert set(df["weather_source"]) == {"climate fill"}
-    cal = festival_features(__import__("pandas").date_range("2024-01-10", "2024-01-14"))
+    cal = festival_features(pd.date_range("2024-01-10", "2024-01-14"))
     assert cal.loc["2024-01-13", "days_to_fest"] == 1 and cal.loc["2024-01-14", "holiday"] == 0.0
 
 

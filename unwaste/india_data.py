@@ -30,10 +30,19 @@ import pandas as pd
 
 OUT = Path("data/raw/india_dataset")
 START = "2024-01-01"
-OPEN_HOURS = 16                                   # 6:00-22:00
+OPEN_HOURS = 16                                   # kept for older code paths
+OPEN = (6, 22)                                    # store open 6:00 to 22:59, as FreshRetailNet's open_hours
 BASE_SCALE = 2.0                                  # a busy dark store: ~20 units per item per day
 NOISE_SHAPE = 20.0                                # day-to-day randomness beyond Poisson (lower = noisier)
-# share of a day's demand in each open hour (morning and evening peaks)
+# share of a day's customers in each open hour, by category (hours 6..22)
+HOUR_SHAPE = {
+    "dairy":      [6, 12, 13, 9, 6, 5, 5, 5, 4, 4, 5, 6, 7, 7, 6, 4, 2],
+    "bakery":     [5, 11, 12, 9, 6, 5, 5, 4, 4, 4, 5, 6, 7, 7, 6, 4, 2],
+    "eggs_meat":  [3, 6, 7, 7, 6, 7, 8, 7, 5, 5, 5, 6, 8, 9, 8, 5, 2],
+    "vegetables": [2, 4, 5, 5, 5, 5, 5, 4, 4, 5, 6, 8, 10, 11, 10, 7, 3],
+    "fruits":     [2, 4, 5, 6, 6, 6, 7, 6, 5, 5, 6, 7, 8, 8, 7, 5, 2],
+}
+# legacy daily profile (used only to read old CSVs without hourly data)
 HOUR_PROFILE = np.array([3, 6, 8, 7, 5, 5, 5, 5, 5, 5, 6, 8, 10, 9, 7, 6], float)
 HOUR_PROFILE = HOUR_PROFILE / HOUR_PROFILE.sum()
 
@@ -222,11 +231,13 @@ def generate(end: str | None = None, seed: int = 11, folder: Path = Path("data/r
     cal = festival_features(dates)
     month, dow, dom = dates.month.to_numpy(), dates.dayofweek.to_numpy(), dates.day.to_numpy()
     years = (dates - dates[0]).days.to_numpy() / 365.0
-    rows = []
+    rows, hourly = [], {"hs": [], "oos": [], "hd": []}
     for si, (store, size) in enumerate(STORES):
         tilt = {c: rng.uniform(0.85, 1.2) for c in PRICE_ELASTICITY}           # neighbourhood taste
         fest_sens = rng.uniform(0.7, 1.3)
+        evening_tilt = rng.uniform(0.85, 1.25)                                  # office area vs family area
         for pi, (item, cat, shelf, base_price, base_units, season) in enumerate(ITEMS):
+            margin = rng.uniform(1.05, 1.30)                                    # how generously this item is stocked
             # price: produce moves with the mandi, dairy has step revisions, the rest is flat
             pidx = np.ones(T)
             if cat in ("vegetables", "fruits"):
@@ -262,25 +273,52 @@ def generate(end: str | None = None, seed: int = 11, folder: Path = Path("data/r
                     fest_mult[t_i] *= 1 + share * fest_sens * FEST_EFFECT[ftype][cat]
             mu = mu * np.clip(fest_mult, 0.3, 3.0)
             lam = rng.gamma(NOISE_SHAPE, mu / NOISE_SHAPE)                       # day-to-day noise
-            demand = rng.poisson(lam).astype(float)
-            # stockouts: more likely when demand jumps above the recent level (surges empty shelves)
+            # hourly demand: the day's demand spread over open hours by the category's shape;
+            # weekends start an hour later; each store leans a little to mornings or evenings
+            shape = np.zeros(24)
+            shape[OPEN[0]:OPEN[1] + 1] = HOUR_SHAPE[cat]
+            shape[OPEN[1] - 5:OPEN[1] + 1] *= evening_tilt
+            wkend = np.zeros(24)
+            wkend[OPEN[0] + 1:OPEN[1] + 1] = shape[OPEN[0]:OPEN[1]]
+            wkend[OPEN[0]] = shape[OPEN[0]] * 0.5
+            prof = np.where((dow >= 5)[:, None], wkend / wkend.sum(), shape / shape.sum())
+            prof = prof * rng.gamma(40.0, 1 / 40.0, (T, 24))                   # a little hour-to-hour noise
+            prof = prof / prof.sum(axis=1, keepdims=True)
+            hd = rng.poisson(lam[:, None] * prof)                              # true hourly demand
+            demand = hd.sum(axis=1).astype(float)
+            # stock each morning: the store orders by habit (recent level + a margin), so a surge
+            # empties the shelf early in the day and a quiet day leaves stock over
             recent = pd.Series(demand).rolling(14, min_periods=1).mean().shift(1).bfill().to_numpy()
-            p_out = np.clip(0.14 + 0.35 * (demand > 1.3 * recent + 2), 0, 0.6)
-            out_hours = np.where(rng.random(T) < p_out, rng.integers(1, 9, T), 0)
-            tail = np.array([HOUR_PROFILE[OPEN_HOURS - k:].sum() if k else 0.0 for k in range(OPEN_HOURS + 1)])
-            sales = np.floor(demand * (1 - tail[out_hours]) + rng.random(T) * 0.999)
-            sales = np.minimum(sales, demand)
+            avail = np.maximum(np.round(recent * margin * rng.normal(1.0, 0.07, T)), 1)
+            cum = np.cumsum(hd, axis=1)
+            sold_cum = np.minimum(cum, avail[:, None])
+            hs = np.diff(sold_cum, axis=1, prepend=0).astype(int)              # hourly sales
+            open_h = np.zeros(24, bool)
+            open_h[OPEN[0]:OPEN[1] + 1] = True
+            oos = (((cum > avail[:, None]) | ((cum - hd) >= avail[:, None])) & open_h).astype(np.int8)
+            sales = hs.sum(axis=1).astype(float)
+            out_hours = oos.sum(axis=1)
+            hourly["hs"].append(hs.astype(np.int16))
+            hourly["oos"].append(oos)
+            hourly["hd"].append(hd.astype(np.int16))
             rows.append(pd.DataFrame({
                 "date": dates, "store_id": si, "store_name": store, "product_id": pi, "item": item,
                 "category": cat, "shelf_life_days": shelf, "base_price": base_price,
                 "price": np.round(base_price * pidx * (1 - disc), 1), "price_idx": np.round(pidx, 3),
-                "discount": disc, "sales": sales, "stockout_hours": out_hours, "demand_true": demand}))
+                "discount": disc, "sales": sales, "stockout_hours": out_hours,
+                "first_stockout_hour": np.where(out_hours > 0, oos.argmax(axis=1), -1),
+                "hours_stock_status": [" ".join(map(str, r)) for r in oos],     # 24 flags, 1 = shelf empty that hour
+                "demand_true": demand}))
     df = pd.concat(rows, ignore_index=True)
+    df["_row"] = np.arange(len(df))
     day = wx.join(cal.drop(columns=["ramp"]))
     df = df.merge(day[["rain", "temp", "humidity", "wind", "weather_source", "fest_name", "fest_type",
-                       "fest_weight", "days_to_fest", "holiday"]], left_on="date", right_index=True)
+                       "fest_weight", "days_to_fest", "holiday"]], left_on="date", right_index=True, how="left")
     df["fest_type_code"] = df["fest_type"].map({t: i for i, t in enumerate(FEST_TYPES)}).astype(int)
-    return df.sort_values(["store_id", "product_id", "date"]).reset_index(drop=True)
+    df = df.sort_values(["store_id", "product_id", "date"]).reset_index(drop=True)
+    order = df.pop("_row").to_numpy()
+    df.attrs["hourly"] = {k: np.concatenate(v)[order] for k, v in hourly.items()}   # [rows, 24], same row order
+    return df
 
 
 def main() -> None:
@@ -290,13 +328,18 @@ def main() -> None:
     a = ap.parse_args()
     df = generate(a.end)
     OUT.mkdir(parents=True, exist_ok=True)
+    hr = df.attrs.pop("hourly")
     df.to_csv(OUT / "unwaste_india.csv", index=False)
+    np.savez_compressed(OUT / "unwaste_india_hourly.npz", hours_sale=hr["hs"], hours_stock_status=hr["oos"],
+                        hours_demand_true=hr["hd"])
     real = (df.drop_duplicates("date")["weather_source"] == "open-meteo").mean()
     print(f"[india-data] {len(df):,} rows = {df.store_id.nunique()} stores x {df.product_id.nunique()} items x "
           f"{df.date.nunique()} days ({df.date.min().date()} -> {df.date.max().date()})")
-    print(f"[india-data] real weather on {real:.0%} of days; stockout days {(df.stockout_hours > 0).mean():.0%}; "
-          f"sales hide {1 - df.sales.sum() / df.demand_true.sum():.1%} of demand")
-    print(f"[india-data] wrote {OUT / 'unwaste_india.csv'}")
+    so = df.stockout_hours > 0
+    print(f"[india-data] real weather on {real:.0%} of days; stockout days {so.mean():.0%} "
+          f"(shelf empty {hr['oos'].sum() / (len(df) * (OPEN[1] - OPEN[0] + 1)):.1%} of open hours, typically from "
+          f"{int(df.loc[so, 'first_stockout_hour'].median())}:00); sales hide {1 - df.sales.sum() / df.demand_true.sum():.1%} of demand")
+    print(f"[india-data] wrote {OUT / 'unwaste_india.csv'} (daily) + unwaste_india_hourly.npz (24-hour sales, stockouts, true demand)")
 
 
 if __name__ == "__main__":

@@ -28,17 +28,39 @@ fests = [(pd.Timestamp(f["date"]), f["name"]) for f in M["chart"]["festivals"]]
 
 # ---------------------------------------------------------------- 1. fill-in
 f = M["fill_in"]
-print("\n1 · FILL-IN (hidden demand on empty-shelf days)")
-print(f"   {f['stockout_days_pct']}% of store-item-days had an empty shelf for some hours; sales hide {f['hidden_demand_pct']}% of demand")
-print(f"   error vs true demand on those days: sales as-is {f['error_sales_as_demand']}%  ->  filled in {f['error_filled']}%")
+dt_ = f.get("demand_truth", {})
+print("\n1 · FILL-IN (hidden demand on empty-shelf hours, same model as FreshRetailNet)")
+print(f"   {f['stockout_days_pct']}% of store-item-days ran out; shelf empty {f.get('empty_hours_pct', '?')}% of open hours, "
+      f"usually from {f.get('typical_start_hour', '?')}:00; sales hide {f['hidden_demand_pct']}% of demand")
+if "hour_error_model" in f:
+    print(f"   error on empty hours vs true demand: sales as-is {f['hour_error_sales']}% | simple average "
+          f"{f['hour_error_average']}% | model {f['hour_error_model']}%")
+print(f"   whole stockout days: sales as-is {f['error_sales_as_demand']}%  ->  filled in {f['error_filled']}%")
+if dt_:
+    print(f"   demand-truth test ({dt_['hidden_blocks']} hidden afternoon blocks): zeros {dt_['wape_naive_zero']:.0%} | "
+          f"average {dt_['wape_series_average']:.0%} | model {dt_['wape_model']:.0%}")
+HE = np.load("models/india_hourly_eval.npz", allow_pickle=True)
+rows = np.where((HE["series"] == s) & (HE["oos"].sum(axis=1) >= 3))[0]
+fig, axs = plt.subplots(1, 2, figsize=(14, 4.4), gridspec_kw={"width_ratios": [1, 1.4]})
+if len(rows):
+    r = rows[np.argmax(HE["oos"][rows].sum(axis=1))]
+    hrs = np.arange(24)
+    ax = axs[0]
+    for h_ in hrs[HE["oos"][r].astype(bool)]:
+        ax.axvspan(h_ - 0.5, h_ + 0.5, color="#FDE2E2")
+    ax.bar(hrs, HE["hd"][r], color="#C9D2E6", label="True demand (unknown to a store)")
+    ax.plot(hrs, HE["hs"][r], color="#D64545", marker="o", ms=3, lw=1.5, label="Recorded sales")
+    ax.plot(hrs, HE["corrected"][r], color="#2B59F3", ls="--", lw=1.8, label="Filled in by the model")
+    ax.set_xlim(5.5, 22.5); ax.set_xticks(range(6, 23, 2))
+    ax.set_xlabel("hour of day (shaded = shelf empty)"); ax.set_ylabel("units per hour")
+    ax.set_title(f"One stockout day: {HE['dt'][r][:10]}"); ax.legend(fontsize=8)
 w = slice(len(dates) - 75, len(dates))
-fig, ax = plt.subplots(figsize=(12, 4.2))
-ax.plot(dates[w], E["Y_true"][s, w], color="#14171F", lw=2, label="True demand (unknown to a store)")
+ax = axs[1]
+ax.plot(dates[w], E["Y_true"][s, w], color="#14171F", lw=2, label="True demand")
 ax.plot(dates[w], E["S"][s, w], color="#D64545", lw=1.5, label="Recorded sales")
 ax.plot(dates[w], E["Y"][s, w], color="#2B59F3", lw=1.5, ls="--", label="Filled-in demand")
-so = E["stockout"][s, w] > 0
-ax.scatter(dates[w][so], E["S"][s, w][so], color="#D64545", s=22, zorder=3, label="Day with empty-shelf hours")
-ax.set_title(f"Fill-in: {a.item}, {a.store}, last 75 days"); ax.set_ylabel("units per day"); ax.legend(fontsize=8, ncol=2)
+ax.set_title("Last 75 days, daily totals"); ax.set_ylabel("units per day"); ax.set_xlabel("date"); ax.legend(fontsize=8)
+fig.suptitle(f"Fill-in: {a.item}, {a.store}")
 fig.tight_layout(); fig.savefig(OUT / "india_fillin.png", dpi=150); plt.close(fig)
 
 # ---------------------------------------------------------------- 2. forecast

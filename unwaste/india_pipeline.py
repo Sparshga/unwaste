@@ -23,7 +23,9 @@ import pandas as pd
 from .backends import backend_names
 from .config import default_config
 from .forecast import fit_forecast, to_matrix
-from .india_data import FESTIVALS, HOUR_PROFILE, OPEN_HOURS, OUT as DATA_DIR
+from .data import Panel
+from .impute import correct_demand, demand_truth_test
+from .india_data import FESTIVALS, OPEN, OUT as DATA_DIR
 from .replay import POLICIES, run_policy
 
 TEST_START = "2026-08-01"
@@ -32,33 +34,34 @@ TAIL = 42                                         # days of history the live scr
 
 
 def load_dataset(path: Path = DATA_DIR / "unwaste_india.csv") -> pd.DataFrame:
-    if not path.exists():
-        raise SystemExit(f"{path} not found: run  python -m unwaste.india_data  first")
-    return pd.read_csv(path, parse_dates=["date"])
+    hp = path.with_name("unwaste_india_hourly.npz")
+    if not path.exists() or not hp.exists():
+        raise SystemExit(f"{path} or {hp.name} not found: run  python -m unwaste.india_data  first")
+    df = pd.read_csv(path, parse_dates=["date"], dtype={"hours_stock_status": str})
+    h = np.load(hp)
+    df.attrs["hourly"] = {"hs": h["hours_sale"], "oos": h["hours_stock_status"], "hd": h["hours_demand_true"]}
+    return df
 
 
-def fill_in(df: pd.DataFrame) -> pd.Series:
-    """Hidden demand on empty-shelf days: sales / share of the day's demand that came while in stock.
-    The share comes from the store's hour-of-day demand profile (morning and evening peaks)."""
-    tail = np.array([HOUR_PROFILE[OPEN_HOURS - k:].sum() if k else 0.0 for k in range(OPEN_HOURS + 1)])
-    share_open = 1 - tail[df["stockout_hours"].clip(0, OPEN_HOURS).astype(int).to_numpy()]
-    return pd.Series(np.where(df["stockout_hours"] > 0, df["sales"] / np.maximum(share_open, 0.3), df["sales"]),
-                     index=df.index)
-
-
-def panel(df: pd.DataFrame):
+def panel(df: pd.DataFrame, cfg):
+    """Daily table + 24-hour sales and stockout flags -> the same Panel FreshRetailNet uses."""
     d = df.rename(columns={"date": "dt"}).copy()
     d["store_id"], d["product_id"] = d["store_name"], d["item"]       # readable names everywhere
     d["series_id"] = d.groupby(["store_id", "product_id"], sort=True).ngroup()
     d["activity"] = 0.0
-    d["demand"] = fill_in(d)
+    hr = df.attrs["hourly"]
     meta = d.groupby("series_id").agg(store_id=("store_id", "first"), product_id=("product_id", "first"),
                                       cat=("category", "first"), price=("base_price", "first"),
                                       shelf_life=("shelf_life_days", "first")).reset_index()
     meta["city_id"] = 0
     meta["min_remaining"] = np.ceil(0.30 * meta["shelf_life"]).astype(int)       # FSSAI: 30% left at sale
     meta["sellable_days"] = (meta["shelf_life"] - meta["min_remaining"]).clip(lower=1)
-    return d, meta
+    pnl = Panel(daily=d, hourly_sales=hr["hs"].astype(float), hourly_oos=hr["oos"].astype(bool), meta=meta,
+                source="Unwaste-India")
+    # step 1, exactly as on FreshRetailNet: a model trained only on in-stock hours fills the empty ones
+    corrected, daily = correct_demand(pnl, cfg)
+    d["demand"] = daily.to_numpy()
+    return d, meta, pnl, corrected
 
 
 def _wape(P, Y, te, mask=None):
@@ -74,26 +77,46 @@ def _wape(P, Y, te, mask=None):
 def run(fast: bool = False) -> dict:
     t0 = time.time()
     df = load_dataset()
-    d, meta = panel(df)
+    cfg0 = default_config(open_hours=OPEN, n_estimators=120 if fast else 200)
+    d, meta, pnl, corrected = panel(df, cfg0)
     Y, dates = to_matrix(d, "demand")
     S_obs, _ = to_matrix(d, "sales")
     Y_true, _ = to_matrix(d, "demand_true")
     T = len(dates)
     test_days = int((dates > pd.Timestamp(TEST_START) - pd.Timedelta(days=1)).sum())
-    cfg = default_config(test_days=test_days, calendar_feats=True, review_period_days=1, late_markdown_units_only=True, newsvendor_review_window=True, train_origin_step=3 if fast else 2,
+    cfg = default_config(test_days=test_days, calendar_feats=True, review_period_days=1, open_hours=OPEN, late_markdown_units_only=True, newsvendor_review_window=True, train_origin_step=3 if fast else 2,
                          n_estimators=120 if fast else 200, out_dir="web/data")
     print(f"[india] {Y.shape[0]} series x {T} days ({dates[0].date()} -> {dates[-1].date()}); "
           f"train to {dates[T - test_days - 1].date()}, test {test_days} days; backends {backend_names()}")
 
-    # 1. fill-in test: we know true demand here, a real store does not
-    so = df["stockout_hours"].to_numpy() > 0
-    true_o, sales_o, filled_o = df["demand_true"].to_numpy()[so], df["sales"].to_numpy()[so], d["demand"].to_numpy()[so]
-    fill = {"stockout_days_pct": round(100 * so.mean(), 1),
+    # 1. fill-in test: we know the true hourly demand here, a real store does not
+    hr = df.attrs["hourly"]
+    oos = hr["oos"].astype(bool)
+    hs, hd = hr["hs"].astype(float), hr["hd"].astype(float)
+    sid = d["series_id"].to_numpy()
+    instock = ~oos
+    sum_sh = np.zeros((sid.max() + 1, 24))
+    cnt_sh = np.zeros((sid.max() + 1, 24))
+    np.add.at(sum_sh, sid, np.where(instock, hs, 0))
+    np.add.at(cnt_sh, sid, instock)
+    avg_sh = (sum_sh / np.maximum(cnt_sh, 1))[sid]                     # simple average of in-stock hours
+    truth = hd[oos]
+    err = lambda est: round(100 * float(np.abs(est - truth).sum() / max(truth.sum(), 1e-9)), 1)
+    so_days = df["stockout_hours"].to_numpy() > 0
+    t_day = df["demand_true"].to_numpy()[so_days]
+    fill = {"stockout_days_pct": round(100 * so_days.mean(), 1),
+            "empty_hours_pct": round(100 * oos.sum() / (len(df) * (OPEN[1] - OPEN[0] + 1)), 1),
+            "typical_start_hour": int(np.median(df.loc[so_days, "first_stockout_hour"])),
             "hidden_demand_pct": round(100 * (1 - df["sales"].sum() / df["demand_true"].sum()), 1),
-            "error_sales_as_demand": round(100 * np.abs(sales_o - true_o).sum() / true_o.sum(), 1),
-            "error_filled": round(100 * np.abs(filled_o - true_o).sum() / true_o.sum(), 1)}
-    print(f"[fill-in] stockout days {fill['stockout_days_pct']}%: error {fill['error_sales_as_demand']}% "
-          f"(sales as demand) -> {fill['error_filled']}% (filled in)")
+            "hour_error_sales": err(hs[oos]), "hour_error_average": err(np.maximum(avg_sh[oos], hs[oos])),
+            "hour_error_model": err(corrected[oos]),
+            "error_sales_as_demand": round(100 * np.abs(df["sales"].to_numpy()[so_days] - t_day).sum() / t_day.sum(), 1),
+            "error_filled": round(100 * np.abs(d["demand"].to_numpy()[so_days] - t_day).sum() / t_day.sum(), 1)}
+    fill["demand_truth"] = demand_truth_test(pnl, cfg0)
+    print(f"[fill-in] empty hours {fill['empty_hours_pct']}% (stockouts usually from {fill['typical_start_hour']}:00). "
+          f"Error on empty hours vs true demand: sales as-is {fill['hour_error_sales']}% | simple average "
+          f"{fill['hour_error_average']}% | model {fill['hour_error_model']}%")
+    print(f"[fill-in] whole stockout days: sales as-is {fill['error_sales_as_demand']}% -> filled in {fill['error_filled']}%")
 
     # 2. forecast: ours vs no-calendar vs simple baselines, on the test window
     F = fit_forecast(Y, d, cfg, " Unwaste (weather + festivals + price)")
@@ -188,6 +211,9 @@ def run(fast: bool = False) -> dict:
     # arrays for the results script (scripts/india_results.py)
     so_m, _ = to_matrix(d, "stockout_hours")
     STATE.parent.mkdir(parents=True, exist_ok=True)
+    last = (d["dt"] >= dates[-75]).to_numpy()
+    np.savez_compressed(STATE.parent / "india_hourly_eval.npz", series=sid[last], dt=d.loc[last, "dt"].astype(str).to_numpy(),
+                        hs=hs[last], hd=hd[last], oos=oos[last], corrected=corrected[last])
     np.savez_compressed(STATE.parent / "india_eval.npz", dates=dates.astype(str).to_numpy(), Y=Y, S=S_obs, Y_true=Y_true,
                         stockout=so_m, te=te, p10=F[0.1][:, te:, 0], p50=F[0.5][:, te:, 0], p90=F[0.9][:, te:, 0],
                         p50_nc=P_nc[:, te:], p50_raw=F_raw[0.5][:, te:, 0], stores=meta["store_id"].to_numpy(),

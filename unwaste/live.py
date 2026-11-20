@@ -63,7 +63,7 @@ def _target_dates(st) -> pd.DatetimeIndex:
 def fetch_weather(days: pd.DatetimeIndex) -> tuple[list[dict], str]:
     """Live 7-day forecast from Open-Meteo; falls back to our own climate history."""
     url = ("https://api.open-meteo.com/v1/forecast?latitude=%s&longitude=%s&timezone=Asia%%2FKolkata"
-           "&daily=precipitation_sum,temperature_2m_max,temperature_2m_min,relative_humidity_2m_mean,wind_speed_10m_max"
+           "&daily=precipitation_sum,temperature_2m_mean,temperature_2m_max,temperature_2m_min,relative_humidity_2m_mean,wind_speed_10m_max"
            "&start_date=%s&end_date=%s" % (LAT, LON, days[0].date(), days[-1].date()))
     try:
         with urllib.request.urlopen(url, timeout=6) as r:
@@ -72,7 +72,9 @@ def fetch_weather(days: pd.DatetimeIndex) -> tuple[list[dict], str]:
         for i in range(len(d["time"])):
             kmh = float(d["wind_speed_10m_max"][i] or 10)
             out.append({"date": d["time"][i], "rain": float(d["precipitation_sum"][i] or 0),
-                        "temp": round((float(d["temperature_2m_max"][i]) + float(d["temperature_2m_min"][i])) / 2, 1),
+                        # whole-day mean, the same field the model was trained on (archive daily mean)
+                        "temp": round(float(d["temperature_2m_mean"][i]) if d.get("temperature_2m_mean") and d["temperature_2m_mean"][i] is not None
+                                      else (float(d["temperature_2m_max"][i]) + float(d["temperature_2m_min"][i])) / 2, 1),
                         "humidity": float(d["relative_humidity_2m_mean"][i] or 55),
                         "wind": round((kmh / 3.6 / 0.836) ** (2 / 3), 2)})
         if len(out) == len(days):
