@@ -85,7 +85,7 @@
   <span class="badge" id="win"></span>
 </header>
 <nav>
-  <button data-tab="live" class="on">Predict tomorrow</button>
+  <button data-tab="live" class="on">Dynamic demand</button>
   <button data-tab="order">Tonight's order</button>
   <button data-tab="iact">India store actions</button>
   <button data-tab="imain">India results</button>
@@ -101,7 +101,6 @@
   <section id="tab-live">
     <div class="card">
       <div class="lv">
-        <div><label>Day to plan for</label><select id="lv-date"></select></div>
         <div><label>Temperature °C</label><input id="lv-temp" type="number" step="0.1"></div>
         <div><label>Rain mm</label><input id="lv-rain" type="number" step="0.1" min="0"></div>
         <div><label>Humidity %</label><input id="lv-hum" type="number" step="1" min="0" max="100"></div>
@@ -130,7 +129,7 @@
       <label class="muted">Sort</label><select id="or-sort"><option value="cat">By category</option><option value="diff">Biggest change from usual</option><option value="qty">Largest order</option><option value="name">A–Z</option></select>
       <button class="go" id="or-csv">Download order sheet</button><button class="go ghost" id="or-print">Print</button>
     </div>
-    <div id="or-out"><p class="muted">Run a prediction on the Predict tomorrow tab first.</p></div>
+    <div id="or-out"><p class="muted">Open the Dynamic demand tab first.</p></div>
   </section>
 
   <!-- ======================= INDIA STORE ACTIONS ======================= -->
@@ -141,7 +140,7 @@
       <label class="muted">Show</label><select id="ia-show"><option value="risk">Needs attention</option><option value="all">Everything in stock</option></select>
       <span class="muted" id="ia-count"></span>
     </div>
-    <div class="grid2"><div id="ia-list"><p class="muted">Run a prediction on the Predict tomorrow tab first.</p></div><div class="detail" id="ia-detail"><p class="muted">Click a batch to see why.</p></div></div>
+    <div class="grid2"><div id="ia-list"><p class="muted">Open the Dynamic demand tab first.</p></div><div class="detail" id="ia-detail"><p class="muted">Click a batch to see why.</p></div></div>
   </section>
 
   <!-- ======================= INDIA RESULTS ======================= -->
@@ -375,24 +374,23 @@ async function liveInit() {
   catch (e) { $('lv-out').innerHTML = `<p class="muted">Live model not available: run <code>python -m unwaste.india_pipeline</code>, then start <code>uvicorn unwaste.api:app --port 8000</code> and open this page from it.</p>`; return; }
   const iso = x => new Date(x.getTime() - x.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
   const now = new Date(), today = iso(now), tmrw = iso(new Date(now.getTime() + 864e5));
-  $('lv-date').innerHTML = LV.days.map(d => `<option value="${d}">${d}${d === today ? ' (today)' : d === tmrw ? ' (tomorrow)' : ''}</option>`).join('');
-  if (LV.days.includes(tmrw)) $('lv-date').value = tmrw;
+
   $('lv-pcat').innerHTML = '<option value="">nothing</option>' + LV.categories.map(c => `<option value="${c}">${CAT[c] || c}</option>`).join('');
   const prefill = () => {
-    const i = LV.days.indexOf($('lv-date').value), w = LV.weather[i], c = LV.calendar[i];
+    const i = 0, w = LV.weather[i], c = LV.calendar[i];
     $('lv-temp').value = w.temp; $('lv-rain').value = w.rain; $('lv-hum').value = w.humidity;
     const auto = c.fest_name ? `From calendar: ${c.fest_name}${c.days_to_fest ? ' in ' + c.days_to_fest + ' day' + (c.days_to_fest > 1 ? 's' : '') : ' (that day)'}` : 'From calendar: none this week';
     $('lv-fest').innerHTML = `<option value="auto">${auto}</option><option value="none">No festival</option>` +
       LV.fest_types.filter(t => t !== 'none').map(t => `<option value="${t}">${FEST[t] || t} on this day</option>`).join('');
   };
-  $('lv-date').onchange = prefill; prefill();
-  $('lv-src').textContent = `Sales history up to ${LV.last_day}. Weather: ${LV.weather_source.startsWith('Open') ? 'live forecast for Gurugram' : 'usual weather for these dates (offline)'}. You can type your own.`;
+  prefill();
+  $('lv-src').textContent = `Planning for ${dayName(LV.days[0])}, the day after the latest sales (${LV.last_day}). Weather: ${LV.weather_source.startsWith('Open') ? 'live forecast for Gurugram' : 'usual weather for these dates (offline)'}. You can type your own.`;
   $('lv-go').onclick = liveRun;
   liveRun();
 }
 async function liveRun() {
   const cat = $('lv-pcat').value, pct = $('lv-pct').value;
-  const body = {target: $('lv-date').value,
+  const body = {target: LV.days[0],
     weather: {temp: $('lv-temp').value, rain: $('lv-rain').value, humidity: $('lv-hum').value},
     festival: {type: $('lv-fest').value, size: parseFloat($('lv-size').value)},
     price_change: cat && pct !== '' ? {[cat]: parseFloat(pct)} : {}};
@@ -405,7 +403,7 @@ async function liveRun() {
 }
 function renderIAct(p) {
   const f = flt();
-  $('ia-filter').innerHTML = `<b>${filterLabel(f)}</b> (change store or item on the Predict tomorrow tab) ·`;
+  $('ia-filter').innerHTML = `<b>${filterLabel(f)}</b> (change store or item on the Dynamic demand tab) ·`;
   const verb = b => b.action === 'transfer' ? `Move ${b.units} to ${b.to_store}` : b.action === 'markdown' ? `Discount 15% now` :
     b.action === 'hold' ? 'Keep: no better option' : b.action === 'clearance' ? 'Last day: sell at 30% off' : b.action === 'watch' ? 'Keep an eye on it' : 'Fine';
   const pill = b => ({transfer: 'transfer', markdown: 'markdown', hold: 'hold', clearance: 'markdown', watch: 'hold', ok: 'hold'})[b.action];
@@ -498,7 +496,7 @@ function renderLive(p) {
         <div class="sub">${fmt(moved)} units moved to stores that will sell them · ${acts.filter(a => a.action === 'markdown').length} discounts</div>
         <div class="metric">Money kept instead of throwing the stock away</div></div>
     </div>
-    <p class="muted" style="margin:8px 0 0">Trade-off: ordering less means about ${fmt(Math.round(lU))} units may sell out tomorrow (${fmt(Math.round(lH))} the usual way).</p>`;
+    `;
   const single = S.length === 1;
   const tot = key => p.days.map((_, d) => Math.round(S.reduce((t, x) => t + x[key][d], 0)));
   const lines = [{name: 'Most likely', data: tot('p50'), color: '#2B59F3'}, {name: 'Normal day', data: tot('normal'), color: '#9AA3B5', dash: true, width: 2}];
@@ -523,10 +521,6 @@ function renderLive(p) {
   h += `<div class="section-title"><h2>${byStore ? 'By store' : 'By item'}, ${p.target}</h2><span class="muted">Chance of waste = how likely stock in the store expires before it sells</span></div>
     <div class="scroll"><table><tr><th>${byStore ? 'Store' : 'Item'}</th><th>Customers will want${rowsOne ? ' <span class="vs">(quiet–busy)</span>' : ''}</th><th>vs normal</th><th>Order tonight <span class="vs">(usual)</span></th><th>In stock</th><th>Chance of waste</th><th>May expire</th>${byStore ? '' : '<th>Shelf life</th>'}</tr>${
     rows.map(r => `<tr><td><b>${r.name}</b></td><td><b>${fmt(Math.round(r.p50))}</b>${rowsOne ? ` <span class="muted">(${fmt(Math.round(r.p10))}–${fmt(Math.round(r.p90))})</span>` : ''}</td><td class="${r.chg > 3 ? 'up' : r.chg < -3 ? 'down' : ''}">${signed(r.chg, '%')}</td><td><b>${fmt(r.order)}</b> <span class="vs">(${fmt(r.habit)})</span></td><td>${fmt(r.on_hand)}</td><td>${riskPill(r.risk)}</td><td>${r.exp >= 0.5 ? fmt(Math.round(r.exp)) + ' · ' + rs(r.rsk) : '—'}</td>${byStore ? '' : `<td>${r.shelf} d</td>`}</tr>`).join('') || '<tr><td colspan="8">No match.</td></tr>'}</table></div>`;
-  const actsQ = acts.filter(a => hit(q, a.item, a.store, a.to_store));
-  h += actsQ.length ? `<h2>What to do tonight</h2><table><tr><th>Action</th><th>Item</th><th>From → to</th><th>Units</th><th>Chance of waste</th><th>Last day to sell</th><th>Money saved</th></tr>${
-      actsQ.slice(0, 25).map(a => `<tr><td><span class="pill ${a.action}">${a.action === 'transfer' ? 'Move' : a.action === 'markdown' ? 'Discount 15%' : 'Hold'}</span></td><td>${a.item}</td><td>${a.store}${a.to_store ? ' → ' + a.to_store : ''}</td><td>${fmt(a.units)}</td><td>${riskPill(a.p_leftover)}</td><td>${a.sellby}</td><td><b>${rs(a.value_rs)}</b></td></tr>`).join('')}</table>`
-    : `<p class="muted">Nothing to move or discount tonight for ${filterLabel(f)}.</p>`;
   h += `<details style="margin-top:18px"><summary class="muted" style="cursor:pointer">How is this calculated?</summary><div class="card" style="margin-top:8px;font-size:13px;line-height:1.6">
     <b>Forecast:</b> one LightGBM model trained on 2024–2026 sales of all stores, using recent sales, weekday, month, weather, the festival calendar and price. "Most likely" is its middle (P50) estimate; quiet and busy days are its 10th and 90th percentiles.<br>
     <b>Chance of waste:</b> ${p.mc_paths} simulated weeks of customer demand drawn from that range; stock is sold oldest-first; we count how often each batch is still left on its last selling day (Monte Carlo).<br>
@@ -565,8 +559,12 @@ function orderRows(p) {
   });
 }
 function renderOrder(p) {
+  if (!p.calendar || !p.series.length || p.series[0].cycle === undefined) {
+    $('or-out').innerHTML = '<div class="card"><b>The server is running an older version.</b><p class="muted">Stop it (Ctrl+C) and start it again with <code>uvicorn unwaste.api:app --port 8000 --reload</code>, then refresh this page.</p></div>';
+    return;
+  }
   const f = flt();
-  $('or-filter').innerHTML = `<b>${filterLabel(f)}</b> (change store or item on the Predict tomorrow tab) ·`;
+  $('or-filter').innerHTML = `<b>${filterLabel(f)}</b> (change store or item on the Dynamic demand tab) ·`;
   const rows = orderRows(p), ordered = rows.filter(r => r.order > 0), skipped = rows.filter(r => r.order === 0);
   const sum = (a, k) => a.reduce((t, r) => t + r[k], 0);
   const units = sum(ordered, 'order'), usual = sum(rows, 'habit'), value = sum(ordered, 'value');
