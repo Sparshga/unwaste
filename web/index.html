@@ -65,6 +65,16 @@
   .risk.hi{ background:#FDE2E2; color:#B42318 } .risk.mid{ background:#FFF1D6; color:#9A5B00 }
   .section-title{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap }
   .vs{ color:var(--muted); font-size:12px }
+  .go.ghost{ background:#fff; color:var(--blue); border:1px solid var(--blue) }
+  .cat{ display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:700; color:#fff }
+  .cat.dairy{ background:#2B59F3 } .cat.bakery{ background:#B7791F } .cat.eggs_meat{ background:#C0392B } .cat.vegetables{ background:#1C7C3A } .cat.fruits{ background:#8E44AD }
+  .qbar{ position:relative; height:10px; background:#EEF1F7; border-radius:5px; min-width:120px }
+  .qbar i{ position:absolute; left:0; top:0; bottom:0; border-radius:5px; background:#2B59F3 }
+  .qbar b{ position:absolute; top:-3px; width:2px; height:16px; background:#14171F }
+  .chg{ display:inline-block; min-width:62px; text-align:center; padding:3px 8px; border-radius:12px; font-weight:700; font-size:12px }
+  .chg.more{ background:#FFF1D6; color:#9A5B00 } .chg.less{ background:#E3F4E8; color:#1C7C3A } .chg.same{ background:#EEF1F7; color:var(--muted) }
+  .catrow td{ background:#F4F7FF; font-weight:700; color:var(--ink) }
+  @media print { header, nav, .noprint, #tab-live, #tab-iact, #tab-imain { display:none !important } #tab-order{ display:block !important } body{ background:#fff } }
 </style>
 </head>
 <body>
@@ -76,6 +86,7 @@
 </header>
 <nav>
   <button data-tab="live" class="on">Predict tomorrow</button>
+  <button data-tab="order">Tonight's order</button>
   <button data-tab="iact">India store actions</button>
   <button data-tab="imain">India results</button>
   <span class="navsep">Evidence for reviewers:</span>
@@ -109,6 +120,17 @@
       <label class="muted">Sort</label><select id="lv-sort"><option value="risk">Most waste risk first</option><option value="chg">Biggest change first</option><option value="name">A–Z</option></select>
     </div>
     <div id="lv-out"><p class="muted">Start the server with <code>uvicorn unwaste.api:app --port 8000</code> and open this page from it.</p></div>
+  </section>
+
+  <!-- ======================= TONIGHT'S ORDER ======================= -->
+  <section id="tab-order" class="hide">
+    <div class="controls noprint">
+      <span class="muted" id="or-filter"></span>
+      <input id="or-q" class="search" placeholder="Search item…">
+      <label class="muted">Sort</label><select id="or-sort"><option value="cat">By category</option><option value="diff">Biggest change from usual</option><option value="qty">Largest order</option><option value="name">A–Z</option></select>
+      <button class="go" id="or-csv">Download order sheet</button><button class="go ghost" id="or-print">Print</button>
+    </div>
+    <div id="or-out"><p class="muted">Run a prediction on the Predict tomorrow tab first.</p></div>
   </section>
 
   <!-- ======================= INDIA STORE ACTIONS ======================= -->
@@ -178,7 +200,7 @@ const $ = id => document.getElementById(id);
 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
-  ['live','iact','imain','actions','score','truth','proof','india'].forEach(t => $('tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
+  ['live','order','iact','imain','actions','score','truth','proof','india'].forEach(t => $('tab-' + t).classList.toggle('hide', t !== b.dataset.tab));
 });
 
 function svgBars(values, labels, opts = {}) {
@@ -379,7 +401,7 @@ async function liveRun() {
   if (!r.ok) { $('lv-out').innerHTML = `<p class="muted">Error: ${await r.text()}</p>`; return; }
   const p = await r.json();
   LVP = p;
-  renderLive(p); renderIAct(p);
+  renderLive(p); renderIAct(p); renderOrder(p);
 }
 function renderIAct(p) {
   const f = flt();
@@ -429,8 +451,10 @@ function initFilters(p) {
   const cats = [...new Set(p.series.map(x => x.cat))].sort(), items = [...new Set(p.series.map(x => x.item))].sort();
   it.innerHTML = '<option value="">All items</option>' + cats.map(c => `<option value="cat:${c}">All ${(CAT[c] || c).toLowerCase()}</option>`).join('') +
     items.map(i => `<option>${i}</option>`).join('');
-  const redraw = () => { renderLive(LVP); renderIAct(LVP); };
+  const redraw = () => { renderLive(LVP); renderIAct(LVP); renderOrder(LVP); };
   st.onchange = redraw; it.onchange = redraw; $('lv-sort').onchange = redraw;
+  $('or-q').oninput = () => renderOrder(LVP); $('or-sort').onchange = () => renderOrder(LVP);
+  $('or-csv').onclick = orderCSV; $('or-print').onclick = () => window.print();
   $('lv-q').oninput = () => renderLive(LVP); $('ia-q').oninput = () => renderIAct(LVP);
 }
 function flt() { return {store: $('lv-store').value, item: $('lv-item').value}; }
@@ -509,6 +533,91 @@ function renderLive(p) {
     <b>Tonight's order:</b> the quantity with the best expected profit across those simulations, counting sales, waste and a cost for sold-out items, and never below the 60th percentile of tomorrow's demand. "Usual" = recent sales + 15%.<br>
     <b>Moves:</b> chosen across all stores at once (min-cost flow), only if the stock arrives with selling days left and earns more than a discount. Stock shown is a sample store that ordered every 3 days the usual way.</div></details>`;
   $('lv-out').innerHTML = h;
+}
+
+// ======================= TONIGHT'S ORDER =======================
+const dayName = d => new Date(d + 'T00:00:00').toLocaleDateString('en-IN', {weekday: 'short', day: 'numeric', month: 'short'});
+function orderReasons(p, x) {
+  const n = x.cycle, out = [];
+  const want = x.p50.slice(0, n).reduce((a, b) => a + b, 0), norm = x.normal.slice(0, n).reduce((a, b) => a + b, 0);
+  const chg = norm ? Math.round(100 * (want / norm - 1)) : 0;
+  const fest = p.calendar.slice(0, n + 1).find(c => c.fest_name && c.days_to_fest <= 3);
+  if (fest && chg >= 3) out.push(`${fest.fest_name} coming: +${chg}%`);
+  const wet = p.weather.slice(0, n).find(w => w.rain >= 10);
+  if (wet && !out.length && chg >= 3) out.push(`Heavy rain ${dayName(wet.date)}: +${chg}%`);
+  const pc = p.price_change[x.cat];
+  if (pc) out.push(`Price ${pc > 0 ? 'up' : 'down'} ${Math.abs(pc)}%`);
+  if (x.order === 0 && x.on_hand > 0) out.push('Enough stock on hand');
+  else if (x.order < x.habit * 0.9 && x.on_hand > 0) out.push(`${fmt(x.on_hand)} already in stock`);
+  const more = x.order > x.habit, less = x.order < x.habit;
+  if (!out.length && Math.abs(chg) >= 3 && ((chg > 0 && more) || (chg < 0 && less))) out.push(`Demand ${chg > 0 ? 'up' : 'down'} ${Math.abs(chg)}% vs a normal day`);
+  if (!out.length && x.order > x.habit * 1.1) out.push('Sold-out hours added back to demand');
+  return out.join(' · ') || '—';
+}
+function orderRows(p) {
+  const f = flt(), q = ($('or-q').value || '').trim();
+  const S = p.series.map((x, i) => ({...x, idx: i})).filter(x => matchS(x, f) && hit(q, x.item, x.store));
+  return S.map(x => {
+    const want = x.p50.slice(0, x.cycle).reduce((a, b) => a + b, 0);
+    const until = p.days[Math.min(x.cycle, p.days.length) - 1];
+    const diff = x.habit ? Math.round(100 * (x.order / x.habit - 1)) : (x.order ? 100 : 0);
+    return {...x, want, until, diff, value: x.order * x.cost, why: orderReasons(p, x)};
+  });
+}
+function renderOrder(p) {
+  const f = flt();
+  $('or-filter').innerHTML = `<b>${filterLabel(f)}</b> (change store or item on the Predict tomorrow tab) ·`;
+  const rows = orderRows(p), ordered = rows.filter(r => r.order > 0), skipped = rows.filter(r => r.order === 0);
+  const sum = (a, k) => a.reduce((t, r) => t + r[k], 0);
+  const units = sum(ordered, 'order'), usual = sum(rows, 'habit'), value = sum(ordered, 'value');
+  const wU = sum(rows, 'waste_u'), wH = sum(rows, 'waste_h'), wRs = rows.reduce((t, r) => t + (r.waste_h - r.waste_u) * r.price, 0);
+  const sk = $('or-sort').value, catOrder = ['dairy', 'bakery', 'eggs_meat', 'vegetables', 'fruits'];
+  ordered.sort((a, b) => sk === 'qty' ? b.order - a.order : sk === 'name' ? a.item.localeCompare(b.item) :
+    sk === 'cat' ? (catOrder.indexOf(a.cat) - catOrder.indexOf(b.cat)) || b.order - a.order : Math.abs(b.order - b.habit) - Math.abs(a.order - a.habit));
+  const maxQ = Math.max(1, ...ordered.map(r => Math.max(r.order, r.habit)));
+  const many = !f.store;
+  let h = `<div class="section-title"><h2>Order for delivery on ${dayName(p.days[0])} · ${filterLabel(f)}</h2><span class="muted">placed tonight, arrives tomorrow morning</span></div>
+    <div class="hero">
+      <div class="card"><div class="lbl">Units to order tonight</div><div class="kpi">${fmt(units)}</div><div class="sub">usual way: ${fmt(usual)} · ${ordered.length} items</div>
+        <div class="metric">Each item ordered to last until its next delivery</div></div>
+      <div class="card"><div class="lbl">Order value (at cost)</div><div class="kpi">${rs(value)}</div><div class="sub">${fmt(skipped.length)} item${skipped.length === 1 ? '' : 's'} need no order tonight</div>
+        <div class="metric">Purchase cost = 70% of selling price</div></div>
+      <div class="card good"><div class="lbl">Waste avoided by this order</div><div class="kpi">${fmt(Math.max(0, Math.round(wH - wU)))} units</div>
+        <div class="sub">${rs(wRs)} kept · likely waste ${fmt(Math.round(wU))} vs ${fmt(Math.round(wH))} the usual way</div>
+        <div class="metric">Units from this delivery likely to expire unsold, vs ordering the usual way</div></div>
+    </div>
+    <div class="row" style="gap:18px;margin:12px 0 6px;font-size:12px" class="muted">
+      <span><span class="chg less">−20%</span> ordering less than usual</span><span><span class="chg more">+20%</span> ordering more</span>
+      <span><span style="display:inline-block;width:40px;height:8px;background:#2B59F3;border-radius:4px"></span> our order &nbsp;<span style="display:inline-block;width:2px;height:12px;background:#14171F"></span> usual order</span>
+      ${['dairy', 'bakery', 'eggs_meat', 'vegetables', 'fruits'].map(c => `<span class="cat ${c}">${CAT[c]}</span>`).join(' ')}</div>
+    <div class="scroll" style="max-height:none"><table><tr><th>Item</th>${many ? '<th>Store</th>' : ''}<th>Order tonight</th><th style="width:170px">Our order vs usual</th><th>Change</th><th>Delivery</th><th>Lasts until</th><th>Customers will want</th><th>In stock</th><th>Why</th></tr>`;
+  let lastCat = null;
+  ordered.forEach(r => {
+    if (sk === 'cat' && r.cat !== lastCat) { h += `<tr class="catrow"><td colspan="${many ? 10 : 9}">${CAT[r.cat]}</td></tr>`; lastCat = r.cat; }
+    const small = r.habit < 5, dU = r.order - r.habit;
+    const cls = small ? (dU <= -2 ? 'less' : dU >= 2 ? 'more' : 'same') : (r.diff <= -10 ? 'less' : r.diff >= 10 ? 'more' : 'same');
+    h += `<tr><td><span class="cat ${r.cat}" title="${CAT[r.cat]}">&nbsp;</span> <b>${r.item}</b></td>${many ? `<td>${r.store}</td>` : ''}
+      <td style="font-size:18px"><b>${fmt(r.order)}</b></td>
+      <td><div class="qbar"><i style="width:${100 * r.order / maxQ}%"></i><b style="left:${100 * r.habit / maxQ}%"></b></div><span class="vs">usual ${fmt(r.habit)}</span></td>
+      <td><span class="chg ${cls}">${r.habit < 5 ? (r.order - r.habit > 0 ? '+' : r.order - r.habit < 0 ? '−' : '') + Math.abs(r.order - r.habit) + ' units' : (r.diff > 0 ? '+' : r.diff < 0 ? '−' : '') + Math.abs(r.diff) + '%'}</span></td>
+      <td>${r.cycle === 1 ? 'Daily' : `Every ${r.cycle} days`}</td><td>${dayName(r.until)}</td>
+      <td>${fmt(Math.round(r.want))} <span class="vs">over ${r.cycle} day${r.cycle > 1 ? 's' : ''}</span></td><td>${fmt(r.on_hand)}</td><td class="muted">${r.why}</td></tr>`;
+  });
+  h += `</table></div>`;
+  if (skipped.length) h += `<h2>Not ordering tonight</h2><p class="muted">Stock on hand already covers these until their next delivery.</p><div class="row" style="gap:8px">${
+    skipped.sort((a, b) => b.on_hand - a.on_hand).map(r => `<span class="pill hold"><span class="cat ${r.cat}">&nbsp;</span> ${r.item}${many ? ' · ' + r.store : ''}: ${fmt(r.on_hand)} in stock</span>`).join('')}</div>`;
+  $('or-out').innerHTML = h;
+  window._orderRows = ordered;
+}
+function orderCSV() {
+  const p = LVP, rows = window._orderRows || [];
+  const head = ['delivery_date', 'store', 'item', 'category', 'order_units', 'usual_units', 'delivery_cycle_days', 'lasts_until', 'expected_demand', 'in_stock', 'reason'];
+  const esc = v => `"${String(v).replace(/"/g, '""')}"`;
+  const lines = [head.join(',')].concat(rows.map(r => [p.days[0], r.store, r.item, CAT[r.cat], r.order, r.habit, r.cycle, r.until, Math.round(r.want), r.on_hand, r.why].map(esc).join(',')));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([lines.join('\n')], {type: 'text/csv'}));
+  a.download = `order_${(flt().store || 'all_stores').replace(/\s+/g, '_')}_${p.days[0]}.csv`;
+  a.click();
 }
 
 async function load(name) {

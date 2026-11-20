@@ -284,12 +284,15 @@ def predict(inputs: dict) -> dict:
         "series": [{"store": meta["store_id"].iloc[s], "item": meta["product_id"].iloc[s], "cat": meta["cat"].iloc[s],
                     "shelf": int(meta["shelf_life"].iloc[s]), "order": int(orders[s]), "on_hand": int(on_hand[s]),
                     "habit": int(habit[s]), "price": float(price[s]),
+                    "cycle": int(meta["review_days"].iloc[s]) if "review_days" in meta.columns else int(cfg.review_period_days),
+                    "cost": round(float(cfg.cost_ratio * price[s]), 2),
                     "waste_u": round(waste_u[s], 1), "waste_h": round(waste_h[s], 1),
                     "lost_u": round(lost_u[s], 1), "lost_h": round(lost_h[s], 1),
                     "normal": np.round(F0[0.5][s], 1).tolist(), "p10": np.round(F[0.1][s], 1).tolist(),
                     "p50": np.round(F[0.5][s], 1).tolist(), "p90": np.round(F[0.9][s], 1).tolist()}
                    for s in range(len(meta))],
         "service_floor": cfg.service_floor, "mc_paths": cfg.mc_paths,
+        "calendar": cal, "weather": wx, "price_change": inputs.get("price_change") or {},
         "stock_source": "sample: a store that orders every 3 days by habit (simulated, last 3 weeks)" if sample
                         else "Unwaste's own daily-ordering stock from the replay",
     }
